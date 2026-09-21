@@ -1,0 +1,26 @@
+[project]
+name = "krea2-studio"
+version = "0.1.0"
+description = "Independent local Krea 2 generation studio"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "accelerate==1.14.0",
+  "aiohttp==3.14.3",
+  "diffusers==0.40.0",
+  "peft==0.21.0",
+  "pillow==12.3.0",
+  "safetensors>=0.6,<0.9",
+  "spandrel==0.4.2",
+  "torch==2.14.0+cu130",
+  "transformers==5.16.1",
+]
+
+[project.scripts]
+krea2-studio = "krea2_studio.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/krea2_studio"]

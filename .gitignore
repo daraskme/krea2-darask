@@ -20,4 +20,5 @@ models/**/*.safetensors
 bench/
 .inductor_cache/
 config.local.toml
+settings.json
 *.log

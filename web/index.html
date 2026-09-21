@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#11110f" />
+    <title>Krea 2 Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#prompt">プロンプトへ移動</a>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="Krea 2 Studio">
+          <span class="brand-mark" aria-hidden="true">K2</span>
+          <span>Krea 2 Studio</span>
+        </div>
+        <div class="backend-state" id="backendState" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="backendStateText">エンジンを確認中</span>
+        </div>
+        <button class="icon-button" id="openSettings" type="button" aria-label="設定を開く" title="設定">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.08A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.08A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.08A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.35.72.64 1 .3.27.68.41 1.08.4H21v4h-.08a1.7 1.7 0 0 0-1.52.6Z"/></svg>
+        </button>
+      </header>
+
+      <main class="workspace">
+        <form class="control-panel" id="generationForm">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Create</p>
+              <h1 id="panelTitle">新しいイメージ</h1>
+            </div>
+            <button class="quiet-button" id="resetForm" type="button">リセット</button>
+          </div>
+
+          <div class="mode-tabs" role="tablist" aria-label="制作モード">
+            <button id="generateModeTab" type="button" role="tab" aria-selected="true" aria-controls="generationControls">生成</button>
+            <button id="upscaleModeTab" type="button" role="tab" aria-selected="false" aria-controls="upscaleControls">Hiresアップスケール</button>
+          </div>
+
+          <div id="generationControls" role="tabpanel" aria-labelledby="generateModeTab">
+
+          <section class="form-section prompt-section" aria-labelledby="promptHeading">
+            <div class="label-row">
+              <label id="promptHeading" for="prompt">プロンプト</label>
+              <span class="char-count" id="promptCount">0 / 2000</span>
+            </div>
+            <div class="prompt-wrap">
+              <textarea id="prompt" name="prompt" maxlength="2000" rows="6" required placeholder="光、質感、空気感まで、つくりたい景色を描写…"></textarea>
+              <button class="expand-button" id="toggleNegative" type="button" aria-expanded="false" aria-controls="negativeWrap">除外したい要素</button>
+            </div>
+            <div class="collapsible" id="negativeWrap" hidden>
+              <label class="sr-only" for="negativePrompt">ネガティブプロンプト</label>
+              <textarea id="negativePrompt" name="negative_prompt" maxlength="1000" rows="3" placeholder="画像に含めたくない要素…"></textarea>
+            </div>
+          </section>
+
+          <section class="form-section" aria-labelledby="modelHeading">
+            <div class="label-row">
+              <h2 id="modelHeading">モデルとスタイル</h2>
+              <button class="text-button" id="refreshModels" type="button">再読込</button>
+            </div>
+            <label class="field-label" for="model">モデル</label>
+            <div class="select-wrap">
+              <select id="model" name="model" required disabled>
+                <option value="">モデルを確認中…</option>
+              </select>
+            </div>
+            <div class="field-note" id="modelNote">ローカルモデルのみを使用します</div>
+
+            <div class="preset-group" role="radiogroup" aria-label="生成プリセット">
+              <label class="preset-card">
+                <input type="radio" name="preset" value="turbo8" checked />
+                <span><strong>Turbo</strong><small>8 steps · 高速</small></span>
+              </label>
+              <label class="preset-card">
+                <input type="radio" name="preset" value="fast4" />
+                <span><strong>Turbo 4</strong><small>4-step LoRA 自動</small></span>
+              </label>
+              <label class="preset-card">
+                <input type="radio" name="preset" value="raw" />
+                <span><strong>Raw</strong><small>細部を調整</small></span>
+              </label>
+            </div>
+
+            <div class="subsection-heading">
+              <div>
+                <h3>LoRA</h3>
+                <p>上から順に適用</p>
+              </div>
+              <button class="small-button" id="addLora" type="button">＋ 追加</button>
+            </div>
+            <div class="lora-list" id="loraList" aria-live="polite"></div>
+          </section>
+
+          <section class="form-section" aria-labelledby="canvasHeading">
+            <h2 id="canvasHeading">キャンバス</h2>
+            <div class="aspect-grid" role="radiogroup" aria-label="縦横比">
+              <label><input type="radio" name="aspect" value="1:1" checked /><span><i class="ratio-shape square"></i>1:1</span></label>
+              <label><input type="radio" name="aspect" value="4:5" /><span><i class="ratio-shape portrait"></i>4:5</span></label>
+              <label><input type="radio" name="aspect" value="3:2" /><span><i class="ratio-shape landscape"></i>3:2</span></label>
+              <label><input type="radio" name="aspect" value="16:9" /><span><i class="ratio-shape wide"></i>16:9</span></label>
+            </div>
+            <div class="field-grid two-column">
+              <label><span>幅</span><input id="width" name="width" type="number" min="256" max="4096" step="32" value="1024" inputmode="numeric" /></label>
+              <label><span>高さ</span><input id="height" name="height" type="number" min="256" max="4096" step="32" value="1024" inputmode="numeric" /></label>
+            </div>
+            <div class="seed-row">
+              <label for="seed">シード</label>
+              <div class="seed-input">
+                <input id="seed" name="seed" type="number" min="-1" max="4294967295" value="-1" inputmode="numeric" />
+                <button class="icon-button compact" id="randomSeed" type="button" aria-label="ランダムなシード" title="ランダム">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                </button>
+              </div>
+              <small>−1 で毎回ランダム</small>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <button class="accordion-trigger" id="advancedTrigger" type="button" aria-expanded="false" aria-controls="advancedPanel">
+              <span>詳細設定</span><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg>
+            </button>
+            <div class="advanced-panel" id="advancedPanel" hidden>
+              <div class="field-grid two-column">
+                <label><span>ステップ</span><input id="steps" name="steps" type="number" min="1" max="100" value="8" /></label>
+                <label><span>ガイダンス</span><input id="guidance" name="guidance" type="number" min="0" max="30" step="0.1" value="0" /></label>
+              </div>
+              <label class="field-label" for="scheduler">スケジューラ</label>
+              <div class="select-wrap"><select id="scheduler" name="scheduler"><option value="default">プリセット標準</option></select></div>
+              <label class="field-label" for="attentionBackend">アテンション</label>
+              <div class="select-wrap"><select id="attentionBackend" name="attention_backend"><option value="auto">自動（推奨）</option><option value="sdpa">PyTorch SDPA</option></select></div>
+            </div>
+          </section>
+          </div>
+
+          <div id="upscaleControls" role="tabpanel" aria-labelledby="upscaleModeTab" hidden>
+            <section class="form-section upscale-source-section" aria-labelledby="upscaleSourceHeading">
+              <div class="label-row"><h2 id="upscaleSourceHeading">ソース画像</h2><button class="text-button" id="chooseSource" type="button">履歴から選択</button></div>
+              <div class="source-empty" id="sourceEmpty">
+                <span aria-hidden="true">＋</span>
+                <p>履歴から画像を選んでください</p>
+                <small>画像の「Hires」を押すと、設定も引き継ぎます</small>
+              </div>
+              <div class="source-card" id="sourceCard" hidden>
+                <img id="sourceThumbnail" alt="Hiresソース画像" />
+                <div><strong id="sourceFilename"></strong><span id="sourceDimensions"></span></div>
+                <button class="icon-button compact" id="clearSource" type="button" aria-label="ソース画像を解除">×</button>
+              </div>
+              <dl class="source-settings" id="sourceSettings" hidden>
+                <div><dt>Prompt</dt><dd id="sourcePrompt"></dd></div>
+                <div><dt>Model</dt><dd id="sourceModel"></dd></div>
+                <div><dt>Style LoRA</dt><dd id="sourceLoras"></dd></div>
+              </dl>
+            </section>
+            <section class="form-section" aria-labelledby="upscaleSettingsHeading">
+              <h2 id="upscaleSettingsHeading">Hires設定</h2>
+              <div class="hires-options hires-options-standalone">
+                <label><span>拡大率</span><select id="upscaleFactor" name="upscale_factor"><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+                <label><span>再描画の強さ</span><input id="refineStrength" name="refine_strength" type="number" min="0.05" max="0.95" step="0.05" value="0.35" /></label>
+                <label><span>仕上げステップ</span><input id="refineSteps" name="refine_steps" type="number" min="1" max="50" value="8" /></label>
+                <label><span>拡大方法</span><select id="hiresMethod" name="hires_method"><option value="auto">自動（推奨）</option><option value="neural">ニューラル</option><option value="lanczos">Lanczos</option></select></label>
+                <p id="upscalerNote">利用できるアップスケーラを確認中…</p>
+              </div>
+            </section>
+          </div>
+
+          <div class="generate-dock">
+            <div class="inline-error" id="formError" role="alert" hidden></div>
+            <button class="generate-button" id="generateButton" type="submit" disabled>
+              <span class="generate-label">生成する</span>
+              <span class="shortcut" aria-hidden="true">Ctrl ↵</span>
+            </button>
+          </div>
+        </form>
+
+        <section class="stage" aria-labelledby="stageHeading">
+          <h2 class="sr-only" id="stageHeading">プレビュー</h2>
+          <div class="stage-toolbar">
+            <div class="stage-title">
+              <span id="stageFilename">プレビュー</span>
+              <span id="stageMeta"></span>
+            </div>
+            <div class="stage-actions" id="stageActions" hidden>
+              <button class="icon-button" id="reuseSettings" type="button" title="設定を再利用" aria-label="この画像の設定を再利用">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/></svg>
+              </button>
+              <button class="hires-stage-button" id="openInHires" type="button">Hiresで開く</button>
+              <a class="icon-button" id="downloadImage" href="#" download title="ダウンロード" aria-label="画像をダウンロード">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M5 21h14"/></svg>
+              </a>
+              <button class="icon-button" id="openOutput" type="button" title="保存先を開く" aria-label="保存先フォルダーを開く">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3V7Z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="preview-frame" id="previewFrame">
+            <img id="previewImage" alt="生成画像のプレビュー" hidden />
+            <div class="empty-stage" id="emptyStage">
+              <div class="empty-orbit" aria-hidden="true"><span></span></div>
+              <p>ここに作品が現れます</p>
+              <small>プロンプトを入力して、最初の一枚をつくりましょう</small>
+            </div>
+            <div class="generation-overlay" id="generationOverlay" hidden>
+              <div class="progress-visual" aria-hidden="true"><span></span></div>
+              <div class="progress-copy">
+                <strong id="progressTitle">準備しています</strong>
+                <span id="progressDetail">モデルを読み込んでいます</span>
+              </div>
+              <div class="progress-track" role="progressbar" aria-label="生成進捗" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><span id="progressBar"></span></div>
+              <div class="progress-footer"><span id="progressPercent">0%</span><span id="progressEta"></span></div>
+              <button class="cancel-button" id="cancelButton" type="button">生成を中止</button>
+            </div>
+          </div>
+          <div class="stage-caption" id="stageCaption" hidden>
+            <p id="captionPrompt"></p>
+            <button class="text-button" id="toggleMetadata" type="button" aria-expanded="false" aria-controls="metadataPanel">生成情報</button>
+          </div>
+          <dl class="metadata-panel" id="metadataPanel" hidden></dl>
+        </section>
+
+        <aside class="history-panel" aria-labelledby="historyHeading">
+          <div class="history-header">
+            <div><p class="eyebrow">Library</p><h2 id="historyHeading">履歴</h2></div>
+            <button class="icon-button compact" id="refreshHistory" type="button" aria-label="履歴を更新" title="更新">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5"/></svg>
+            </button>
+          </div>
+          <div class="active-job" id="activeJob" hidden>
+            <div class="active-job-top"><span><i></i><b id="activeJobLabel">生成中</b></span><strong id="queuePosition"></strong></div>
+            <p id="activeJobPrompt"></p>
+          </div>
+          <div class="history-list" id="historyList">
+            <div class="history-empty" id="historyEmpty"><span aria-hidden="true">◌</span><p>生成履歴はまだありません</p></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
+      <form method="dialog">
+        <div class="dialog-header"><div><p class="eyebrow">System</p><h2 id="settingsTitle">エンジン情報</h2></div><button class="icon-button" value="cancel" aria-label="閉じる">×</button></div>
+        <div class="system-card">
+          <div><span class="status-dot" aria-hidden="true"></span><strong id="dialogStatus">接続を確認中</strong></div>
+          <button class="small-button" id="reconnectBackend" type="button">再接続</button>
+        </div>
+        <dl class="facts-list" id="factsList"></dl>
+        <details class="optimization-details">
+          <summary>最適化と制約</summary>
+          <div id="optimizationDetails"><p>エンジンから情報を取得しています。</p></div>
+        </details>
+      </form>
+    </dialog>
+
+    <template id="loraRowTemplate">
+      <div class="lora-row">
+        <button class="drag-handle" type="button" aria-label="LoRA の順序を変更" title="ドラッグして並べ替え">⠿</button>
+        <label class="toggle-only"><input class="lora-enabled" type="checkbox" checked aria-label="LoRA を有効化" /><span></span></label>
+        <label class="lora-select-label"><span class="sr-only">LoRA</span><select class="lora-select"></select></label>
+        <label class="weight-field"><span class="sr-only">重み</span><input class="lora-weight" type="number" min="-2" max="2" step="0.05" value="1" aria-label="LoRA の重み" /></label>
+        <button class="remove-lora" type="button" aria-label="LoRA を削除">×</button>
+      </div>
+    </template>
+  </body>
+</html>
