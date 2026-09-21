@@ -1,0 +1,105 @@
+[project]
+name = "krea2-darask"
+version = "0.1.0"
+description = "Krea 2 Fast GUI - diffusers-native generation server + React GUI"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7,<3",
+    "pillow==12.3.0",
+    "piexif==1.1.3",
+    "safetensors>=0.4.5",
+    "tomli-w>=1.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# ---- torch stack (exactly one of cpu / cu130) ----------------------------------
+# torch 2.14.0 Windows wheels exist only on the cu130 index (cu128 stops at 2.9.1), so cu130 is the GPU target.
+cpu = [
+    "torch==2.14.0",
+    "diffusers==0.40.0",
+    "transformers==5.17.0",
+    "accelerate>=1.0",
+    "peft>=0.15",
+]
+cu130 = [
+    "torch==2.14.0",
+    "diffusers==0.40.0",
+    "transformers==5.17.0",
+    "accelerate>=1.0",
+    "peft>=0.15",
+]
+# ---- GPU-only accelerators (Windows / sm_120). Each is optional; import failure -> available()=False.
+gpu = [
+    "triton-windows==3.8.0.post28; sys_platform == 'win32'",
+    "torchao==0.18.0",
+    "comfy-kitchen==0.2.35",
+    "spandrel==0.4.2",
+]
+sage = [
+    # SageAttention 2.2 (unofficial Windows build by woct0rdho). Verify import on the target machine.
+    "sageattention @ https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows.post6/sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl ; sys_platform == 'win32'",
+]
+bench = [
+    "lpips>=0.1.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+conflicts = [
+    [{ extra = "cpu" }, { extra = "cu130" }],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+extend-exclude = ["web", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "TID"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"comfy".msg = "ComfyUI runtime is not a dependency of this project (comfy_kitchen is allowed)."
+"comfy_extras".msg = "ComfyUI runtime is not a dependency of this project (comfy_kitchen is allowed)."
+"torch.load".msg = "Only .safetensors via safetensors.safe_open is allowed."
