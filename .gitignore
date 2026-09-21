@@ -1,0 +1,23 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# node
+web/node_modules/
+web/dist/
+web/playwright-report/
+web/test-results/
+
+# runtime
+outputs/
+models/**/*.safetensors
+bench/
+.inductor_cache/
+config.local.toml
+*.log
