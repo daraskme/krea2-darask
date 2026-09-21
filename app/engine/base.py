@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from PIL import Image
 
-from ..schemas import GenerateRequest
+from app.schemas import GenerateRequest
 
 # progress(step, total_steps, info) - info may contain "phase", "it_s", "vram_gb", "message"
 ProgressCallback = Callable[[int, int, dict[str, Any]], None]

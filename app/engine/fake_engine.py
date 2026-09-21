@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ..schemas import GenerateRequest
+from app.schemas import GenerateRequest
+
 from .base import EngineOutput, ProgressCallback
 
 _PALETTES = [

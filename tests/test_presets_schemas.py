@@ -23,11 +23,9 @@ def test_resolution_presets_unique_multiples_of_16():
     assert "832x2048" in ids
     for p in RESOLUTION_PRESETS:
         assert p.width % 16 == 0 and p.height % 16 == 0
-    # duplicates from the plan table are represented by swap, so no (w,h) and (h,w) pair both present
+    # plan table: 13 rows with 3 "(alt)" duplicates -> 10 unique + 832x2048
     pairs = {(p.width, p.height) for p in RESOLUTION_PRESETS}
-    for w, h in pairs:
-        if w != h:
-            assert (h, w) not in pairs, f"{w}x{h} and its swap both listed"
+    assert len(pairs) == len(RESOLUTION_PRESETS) == 11
 
 
 def test_token_function_single_source():
@@ -59,7 +57,8 @@ def test_denoise_steps_matches_comfyui():
 
 def test_hires_edge_warning():
     assert hires_edge_warning(832, 2048) is not None
-    assert hires_edge_warning(832, 1216) is None
+    assert hires_edge_warning(832, 1216) is not None  # 2432 > 2048
+    assert hires_edge_warning(1024, 1024) is None
 
 
 def test_presets_payload_shape():

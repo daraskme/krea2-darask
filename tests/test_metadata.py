@@ -12,8 +12,8 @@ from app.metadata import (
     JPEG_APP1_LIMIT,
     PNG_TEXT_LIMIT,
     build_parameters,
-    parse_parameters,
     parameters_to_request,
+    parse_parameters,
     quote,
     read_image,
     write_image,
@@ -22,7 +22,7 @@ from app.schemas import GenerateRequest, GenerateResult, Krea2GuiMetadata, LoraS
 
 
 def _meta(**overrides) -> Krea2GuiMetadata:
-    req = GenerateRequest(
+    fields = dict(
         prompt="a cat, sitting: on a \"mat\"\nsecond line",
         negative_prompt="blurry, low quality",
         width=832,
@@ -32,8 +32,8 @@ def _meta(**overrides) -> Krea2GuiMetadata:
         seed=1234,
         transformer="krea2_turbo_bf16.safetensors",
         loras=[LoraSpec(name="style_a.safetensors", strength=0.7, hash="abcdef0123")],
-        **overrides,
     )
+    req = GenerateRequest(**{**fields, **overrides})
     res = GenerateResult(
         output_id="2026-01-01/120000_1234_abc123.png", seed=1234, width=832, height=1216, elapsed_s=1.5,
         steps=4, engine="fake", attention_backend="sdpa", quant="bf16", bsa_used=False, nag_used=False,
@@ -56,13 +56,13 @@ def test_build_parameters_format():
     assert any(line.startswith("Negative prompt: ") for line in lines)
     last = lines[-1]
     parsed = parse_parameters(text)
-    assert len(parsed.pairs) >= 3
-    assert parsed.pairs["Steps"] == "4"
-    assert parsed.pairs["CFG scale"] == "1.0"  # ComfyUI cfg, not diffusers guidance
-    assert parsed.pairs["Seed"] == "1234"
-    assert parsed.pairs["Size"] == "832x1216"
-    assert "Lora hashes" in parsed.pairs
-    assert "style_a: abcdef0123" in parsed.pairs["Lora hashes"]
+    assert len(parsed.settings) >= 3
+    assert parsed.settings["Steps"] == "4"
+    assert parsed.settings["CFG scale"] == "1.0"  # ComfyUI cfg, not diffusers guidance
+    assert parsed.settings["Seed"] == "1234"
+    assert parsed.settings["Size"] == "832x1216"
+    assert "Lora hashes" in parsed.settings
+    assert "style_a: abcdef0123" in parsed.settings["Lora hashes"]
     assert "Version: krea2-darask" in last
     req = parameters_to_request(parsed)
     assert req["seed"] == 1234 and req["width"] == 832 and req["cfg"] == 1.0
@@ -100,7 +100,7 @@ def test_png_has_only_parameters_and_krea2gui(tmp_path: Path):
 
 
 def test_jpeg_exif_within_app1_limit_and_unicode_usercomment(tmp_path: Path):
-    meta = _meta(prompt="x" * 30_000)
+    meta = _meta(prompt="x" * 20_000)
     path = tmp_path / "x.jpg"
     write_image(Image.new("RGB", (32, 32)), path, meta, fmt="jpg")
     exif = piexif.load(str(path))

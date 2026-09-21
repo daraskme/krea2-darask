@@ -187,7 +187,7 @@ class GenerationQueue:
                 output_id = self.outputs.new_id(out.seed, req.output_format)
                 lora_hashes = dict(out.lora_hashes)
                 for lora in req.active_loras():
-                    digest = lora.hash or self.models.hash_of("loras", lora.name)
+                    digest = lora.hash or self.models.hash_of("loras", lora.name, wait=True)
                     if digest:
                         lora_hashes[lora.name] = digest
                 result = GenerateResult(

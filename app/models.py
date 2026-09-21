@@ -16,6 +16,8 @@ from .paths import SAFE_EXT, resolve_in_roots, validate_model_name
 
 log = logging.getLogger(__name__)
 
+SYNC_HASH_MAX_BYTES = 64 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ModelFile:
@@ -165,7 +167,7 @@ class ModelRegistry:
             file = self.resolve(kind, name)
         except (FileNotFoundError, ValueError):
             return None
-        if wait:
+        if wait or file.stat().st_size <= SYNC_HASH_MAX_BYTES:
             return self.hash_cache.compute(file)
         digest = self.hash_cache.get(file)
         if digest is None:

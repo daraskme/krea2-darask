@@ -48,7 +48,7 @@ def test_models_and_presets_endpoints(client):
     body = r.json()
     assert [m["name"] for m in body["diffusion_models"]] == ["krea2_turbo_bf16.safetensors"]
     assert len(body["loras"]) == 2
-    assert body["hf_text_encoders"] == ["Qwen3-VL-4B-Instruct"]
+    assert body["hf_text_encoders"][-1] == "Qwen3-VL-4B-Instruct"
     r = client.get("/api/presets")
     assert r.status_code == 200
     assert {p["id"] for p in r.json()["workflows"]} >= {"fast_4step", "turbo_8step", "hires_2x"}

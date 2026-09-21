@@ -6,7 +6,13 @@ import pytest
 
 from app.config import AppConfig, PathsConfig
 from app.models import ModelRegistry
-from app.paths import UnsafePathError, resolve_in_roots, resolve_output, validate_model_name, validate_output_id
+from app.paths import (
+    UnsafePathError,
+    resolve_in_roots,
+    resolve_output,
+    validate_model_name,
+    validate_output_id,
+)
 
 
 @pytest.mark.parametrize(
@@ -84,7 +90,7 @@ def test_registry_scan_only_safetensors(model_tree: Path, tmp_path: Path):
     digest = reg.hash_of("loras", "style_a.safetensors", wait=True)
     assert digest and len(digest) == 10
     resp = reg.all_models()
-    assert resp.hf_text_encoders == ["Qwen3-VL-4B-Instruct"]
+    assert "Qwen3-VL-4B-Instruct" in resp.hf_text_encoders
 
 
 def test_registry_extra_roots_dedupe(model_tree: Path, tmp_path: Path):

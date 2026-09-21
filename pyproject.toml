@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.18",
     "pydantic>=2.7,<3",
     "pillow==12.3.0",
     "piexif==1.1.3",
@@ -88,6 +89,7 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 
 [tool.ruff]
@@ -98,6 +100,12 @@ extend-exclude = ["web", ".venv"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "TID"]
 ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "comfy".msg = "ComfyUI runtime is not a dependency of this project (comfy_kitchen is allowed)."
