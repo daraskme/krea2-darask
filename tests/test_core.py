@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from PIL import Image, ExifTags
 
@@ -72,7 +73,11 @@ class LoaderTests(unittest.TestCase):
 class _FakeEngine:
     model_id = None
     attention_backend = "sdpa"
-    def __init__(self): self.closed = False
+    def __init__(self):
+        self.closed = False
+        self.active_loras = []
+        self.loaded_preset = None
+        self.selection_revision = None
     def generate(self, request, progress, cancelled):
         for index in range(30):
             if cancelled():
@@ -84,6 +89,19 @@ class _FakeEngine:
     def upscale_existing(self, request, progress, cancelled):
         progress(0.5, "hires_refine", "test")
         return {"image_url": "/outputs/upscaled.png", "metadata_url": "/outputs/upscaled.json", "seed": 1}
+    def preload(self, request, progress, cancelled):
+        progress(0.5, "loading", "test")
+        self.model_id = request["model_id"]
+        self.active_loras = list(request.get("loras", []))
+        self.loaded_preset = request["preset"]
+        self.selection_revision = request.get("selection_revision")
+        return {"loaded": True, "model_id": self.model_id, "loras": self.active_loras, "selection_revision": self.selection_revision}
+    def load_loras(self, request, progress, cancelled):
+        progress(0.5, "configuring", "test")
+        self.active_loras = list(request.get("loras", []))
+        self.loaded_preset = request["preset"]
+        self.selection_revision = request.get("selection_revision")
+        return {"loaded": True, "model_id": self.model_id, "loras": self.active_loras, "selection_revision": self.selection_revision}
     def close(self): self.closed = True
 
 
@@ -127,6 +145,42 @@ class JobTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(jobs.get(job_id)["status"], "completed")
         self.assertEqual(jobs.get(job_id)["result"]["image_url"], "/outputs/upscaled.png")
+        jobs.shutdown()
+
+    def test_control_jobs_are_serialized_superseded_and_excluded_from_history(self):
+        class BlockingEngine(_FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self.model_id = "model"
+                self.started = threading.Event()
+                self.release = threading.Event()
+            def generate(self, request, progress, cancelled):
+                self.started.set()
+                while not self.release.wait(0.01):
+                    if cancelled():
+                        from krea2_studio.engine import GenerationCancelled
+                        raise GenerationCancelled()
+                return {"image_url": "/outputs/x.png", "metadata_url": "/outputs/x.json", "seed": 1}
+
+        engine = BlockingEngine()
+        jobs = JobManager(engine, 4)
+        jobs.submit({})
+        self.assertTrue(engine.started.wait(1))
+        newest = jobs.submit({
+            "model_id": "model", "preset": "turbo8", "loras": [{"id": "new", "weight": 0.7}],
+            "selection_revision": 100,
+        }, operation="loras_load")
+        with self.assertRaisesRegex(ValueError, "Stale selection_revision"):
+            jobs.submit({"model_id": "model", "preset": "turbo8", "loras": [], "selection_revision": 99}, operation="loras_load")
+        engine.release.set()
+        deadline = time.time() + 2
+        while jobs.get(newest["job_id"])["status"] not in {"completed", "failed"} and time.time() < deadline:
+            time.sleep(0.01)
+        control = jobs.get(newest["job_id"])
+        self.assertEqual(control["status"], "completed")
+        self.assertEqual(control["result"]["selection_revision"], 100)
+        self.assertEqual(engine.active_loras[0]["id"], "new")
+        self.assertNotIn(newest["job_id"], {item["id"] for item in jobs.history()})
         jobs.shutdown()
 
 
@@ -176,6 +230,37 @@ class ModelLifecycleTests(unittest.TestCase):
         self.assertEqual(len(engine.cache), 0)
         self.assertEqual(engine.active_loras, [])
         self.assertEqual(engine.attention_backend, "sdpa")
+
+    def test_failed_lora_rollback_discards_uncertain_pipeline(self):
+        from krea2_studio.config import DEFAULT_CONFIG
+        from krea2_studio.engine import KreaEngine
+
+        class BrokenPipeline:
+            transformer = object()
+            def unload_lora_weights(self): pass
+            def load_lora_weights(self, _state, adapter_name):
+                raise RuntimeError(f"cannot install {adapter_name}")
+
+        engine = KreaEngine(DEFAULT_CONFIG)
+        engine.pipe = BrokenPipeline()
+        engine.model_id = "loaded"
+        engine.loaded_preset = "turbo8"
+        engine.selection_revision = 7
+        engine.active_loras = [{"id": "old.safetensors", "weight": 1.0}]
+        catalog = {"items": [
+            {"id": "old.safetensors", "available": True, "category": "style"},
+            {"id": "new.safetensors", "available": True, "category": "style"},
+        ], "fast4_lora_id": None}
+        with mock.patch("krea2_studio.engine.discover_loras", return_value=catalog), \
+             mock.patch("krea2_studio.engine.resolve_lora", side_effect=lambda _config, value: Path(value)), \
+             mock.patch("krea2_studio.engine.load_lora_file", return_value={"weight": object()}):
+            with self.assertRaisesRegex(RuntimeError, "rollback failed"):
+                engine._configure_loras([{"id": "new.safetensors", "weight": 0.7}], "turbo8")
+        self.assertIsNone(engine.pipe)
+        self.assertIsNone(engine.model_id)
+        self.assertIsNone(engine.loaded_preset)
+        self.assertIsNone(engine.selection_revision)
+        self.assertEqual(engine.active_loras, [])
 
 
 class AttentionTests(unittest.TestCase):

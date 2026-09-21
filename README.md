@@ -1,15 +1,17 @@
 # Krea 2 Studio
 
-Krea 2 Studio is a local Windows GUI and independent Diffusers generation engine for Krea 2. It never imports, starts, or sends requests to ComfyUI. Existing model files under `D:/comfyui-models` are read directly and remain in place.
+Krea 2 Studio is a local Windows GUI and independent Diffusers generation engine for Krea 2. It never imports, starts, or sends requests to ComfyUI. Model files can be collected under this project's private `models/` directory and are excluded from Git.
 
 ## Start
 
 1. Run `setup.bat` once. It creates this project's own `.venv` and installs the pinned CUDA 13.0 runtime, Diffusers, SageAttention 2, and the web API dependencies.
 2. Run `start.bat`. The app opens at `http://127.0.0.1:8189`.
-3. Enter a prompt, choose Turbo 8 or Turbo 4, optionally add ordered LoRAs, and generate.
-4. To create a high-resolution version, select a completed image and run the separate high-resolution job.
+3. Choose a model and click **モデルを読み込む**. This allocates the selected model in GPU memory; changing the dropdown alone does not load it.
+4. Select ordered LoRAs and adjust their strengths. When a model is loaded, LoRA changes are applied automatically through the serialized engine queue.
+5. Enter a prompt, choose Turbo 8 or Turbo 4, and generate.
+6. To create a high-resolution version, select a completed image and run the separate high-resolution job.
 
-The server binds only to loopback and disables model downloads. Edit `config.local.toml` (using `config.example.toml` as a template) when model paths differ. Additional models must explicitly declare `family = "turbo"` or `family = "raw"`; self-contained local Diffusers folders are supported.
+The server binds only to loopback and disables model downloads. Keep machine-specific paths in the private, Git-ignored `config.local.toml`, using `config.example.toml` as a template. Point its component and LoRA paths at the copied files under `models/`. Additional models must explicitly declare `family = "turbo"` or `family = "raw"`; self-contained local Diffusers folders are supported.
 
 ## Local model support
 

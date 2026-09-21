@@ -3,6 +3,23 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const CANVAS_PRESETS = {
+    portrait: [
+      { ratio: "1:4", width: 512, height: 2048 },
+      { ratio: "1:3", width: 576, height: 1728 },
+      { ratio: "約9:16", width: 768, height: 1344 },
+      { ratio: "約2:3", width: 832, height: 1216 },
+      { ratio: "約3:4", width: 896, height: 1152 },
+    ],
+    landscape: [
+      { ratio: "4:1", width: 2048, height: 512 },
+      { ratio: "3:1", width: 1728, height: 576 },
+      { ratio: "約16:9", width: 1344, height: 768 },
+      { ratio: "約3:2", width: 1216, height: 832 },
+      { ratio: "約4:3", width: 1152, height: 896 },
+    ],
+    square: [{ ratio: "1:1", width: 1024, height: 1024 }],
+  };
   const state = {
     connected: false,
     capabilities: null,
@@ -16,6 +33,18 @@
     mode: "generate",
     pollTimer: null,
     generationStartedAt: 0,
+    loadedModelId: null,
+    loadedPreset: null,
+    loadedAttentionBackend: null,
+    loadedLoras: [],
+    selectionRevision: 0,
+    appliedRevision: 0,
+    controlJobs: new Map(),
+    controlPollTimers: new Map(),
+    loraApplyTimer: null,
+    pendingLoraApply: false,
+    controlError: null,
+    sizePresetIndex: 2,
   };
 
   const form = $("#generationForm");
@@ -75,6 +104,7 @@
     dialogDot.classList.toggle("is-online", connected);
     dialogDot.classList.toggle("is-offline", !connected);
     updateGenerateAvailability();
+    updateModelRuntimeUI();
   }
 
   function showError(message) {
@@ -90,7 +120,7 @@
   function updateGenerateAvailability() {
     const hasModel = modelSelect.value && !modelSelect.disabled;
     const ready = state.mode === "upscale" ? Boolean(state.upscaleSourceItem) : hasModel;
-    generateButton.disabled = !state.connected || !ready || Boolean(state.activeJobId);
+    generateButton.disabled = !state.connected || !ready || Boolean(state.activeJobId) || state.controlJobs.size > 0;
     $(".generate-label", generateButton).textContent = state.activeJobId
       ? (state.activeJobMode === "upscale" ? "アップスケール中…" : "生成中…")
       : (state.mode === "upscale" ? "アップスケール" : "生成する");
@@ -118,10 +148,15 @@
       renderModels(models.default_id);
       renderCapabilities(capabilities, engineState);
       applyStoredSettings(settings);
+      syncLoadedState(engineState);
       setConnection(true, statusLabel(engineState, capabilities));
       if (engineState.active_job_id) {
-        state.activeJobId = engineState.active_job_id;
-        startPolling();
+        if (["model_load", "loras_load"].includes(engineState.operation)) {
+          trackControlJob(engineState.active_job_id, Number(engineState.requested_selection_revision ?? engineState.selection_revision) || 0, engineState.operation);
+        } else {
+          state.activeJobId = engineState.active_job_id;
+          startPolling();
+        }
       }
       await loadHistory();
     } catch (error) {
@@ -131,13 +166,14 @@
       setConnection(false, "エンジン未接続");
       showError(error.message);
       renderOfflineFacts();
+      updateModelRuntimeUI();
     }
   }
 
   function statusLabel(engineState, capabilities) {
     if (!engineState) return "接続済み";
     if (engineState.status === "generating") return "生成中";
-    if (engineState.status === "loading") return "モデルを読込中";
+    if (engineState.status === "loading" || engineState.status === "configuring") return engineState.operation === "loras_load" ? "LoRAを適用中" : "モデルを読込中";
     if (engineState.status === "error") return "エンジンエラー";
     const deviceName = capabilities?.device?.name || capabilities?.device?.device_name;
     return deviceName ? `${deviceName} · 待機中` : "エンジン接続済み";
@@ -182,6 +218,91 @@
       modelNote.textContent = unavailable.length ? `利用できるモデルなし · ${localizedModelReason(unavailable[0])}` : "対応するローカルモデルを配置してください";
     }
     modelNote.title = unavailable.map((model) => `${model.name}: ${localizedModelReason(model)}`).join("\n");
+  }
+
+  function syncLoadedState(engineState) {
+    state.loadedModelId = engineState.loaded_model_id || engineState.model_id || null;
+    state.loadedPreset = engineState.loaded_preset || null;
+    state.loadedAttentionBackend = engineState.attention_backend || null;
+    state.loadedLoras = Array.isArray(engineState.loaded_loras) ? engineState.loaded_loras : [];
+    const revision = Number(engineState.selection_revision) || 0;
+    const requestedRevision = Number(engineState.requested_selection_revision) || revision;
+    state.appliedRevision = Math.max(state.appliedRevision, revision);
+    state.selectionRevision = Math.max(state.selectionRevision, requestedRevision, revision);
+    if (state.loadedModelId === modelSelect.value && state.loadedPreset === selectedPreset() && loraSelectionMatchesLoaded()) {
+      state.pendingLoraApply = false;
+    }
+    updateModelRuntimeUI();
+  }
+
+  function modelName(modelId) {
+    return state.models.find((model) => model.id === modelId)?.name || modelId || "なし";
+  }
+
+  function updateModelRuntimeUI() {
+    const root = $("#modelRuntimeStatus");
+    const text = $("#modelRuntimeText");
+    const button = $("#loadModel");
+    if (!root || !button) return;
+    root.classList.remove("is-loaded", "is-busy", "is-error");
+    const jobs = [...state.controlJobs.values()];
+    const latestJob = jobs[jobs.length - 1];
+    const selectedMatchesLoaded = Boolean(modelSelect.value) && modelSelect.value === state.loadedModelId;
+    const requestedAttention = $("#attentionBackend").value;
+    const attentionMatches = requestedAttention === "auto"
+      ? Boolean(state.loadedAttentionBackend)
+      : requestedAttention === state.loadedAttentionBackend;
+    const configMatches = selectedMatchesLoaded
+      && state.loadedPreset === selectedPreset()
+      && attentionMatches
+      && loraSelectionMatchesLoaded();
+
+    if (!state.connected) {
+      text.textContent = "エンジン接続後に読み込めます";
+    } else if (latestJob) {
+      root.classList.add("is-busy");
+      text.textContent = latestJob.operation === "loras_load" ? "LoRAを適用しています…" : `${modelName(latestJob.modelId)} を読み込んでいます…`;
+    } else if (state.controlError) {
+      root.classList.add("is-error");
+      text.textContent = state.controlError;
+    } else if (state.pendingLoraApply && selectedMatchesLoaded) {
+      text.textContent = "LoRAの変更を適用予定";
+    } else if (configMatches) {
+      root.classList.add("is-loaded");
+      text.textContent = `読込済み: ${modelName(state.loadedModelId)} · ${state.loadedLoras.length} LoRA`;
+    } else if (state.loadedModelId) {
+      root.classList.add("is-loaded");
+      const suffix = selectedMatchesLoaded ? " · 現在の設定は未適用" : " · 選択モデルは未読込";
+      text.textContent = `GPU: ${modelName(state.loadedModelId)}${suffix}`;
+    } else {
+      text.textContent = state.pendingLoraApply ? "モデル読込時にLoRAを適用します" : "GPUモデル未読込";
+    }
+
+    const busy = state.controlJobs.size > 0 || Boolean(state.activeJobId);
+    button.disabled = !state.connected || !modelSelect.value || modelSelect.disabled || busy || configMatches;
+    button.textContent = jobs.length ? "処理中…" : state.loadedModelId ? (selectedMatchesLoaded ? "更新する" : "読み込む") : "読み込む";
+    updateGenerateAvailability();
+  }
+
+  function canonicalStyleLoras(loras) {
+    return (loras || [])
+      .filter((lora) => lora.enabled !== false && Math.abs(Number(lora.weight) || 0) > 1e-8)
+      .filter((lora) => {
+        const known = state.loras.find((entry) => entry.id === lora.id);
+        return lora.id !== state.fast4LoraId && known?.category !== "distillation" && lora.role !== "fast4";
+      })
+      .map((lora) => `${lora.id}:${Number(lora.weight).toFixed(6)}`);
+  }
+
+  function loraSelectionMatchesLoaded() {
+    const selected = canonicalStyleLoras(collectLoraSelection());
+    const loaded = canonicalStyleLoras(state.loadedLoras);
+    return selected.length === loaded.length && selected.every((value, index) => value === loaded[index]);
+  }
+
+  function attentionSelectionMatchesLoaded() {
+    const requested = $("#attentionBackend").value;
+    return requested === "auto" ? Boolean(state.loadedAttentionBackend) : requested === state.loadedAttentionBackend;
   }
 
   function modelFamily(model) {
@@ -334,12 +455,21 @@
     select.value = selected.id;
     $(".lora-weight", fragment).value = String(weight);
     $(".lora-enabled", fragment).checked = enabled;
-    $(".remove-lora", fragment).addEventListener("click", () => row.remove());
+    $(".remove-lora", fragment).addEventListener("click", () => {
+      row.remove();
+      noteLoraSelectionChanged();
+    });
+    select.addEventListener("change", noteLoraSelectionChanged);
+    $(".lora-weight", fragment).addEventListener("input", noteLoraSelectionChanged);
+    $(".lora-enabled", fragment).addEventListener("change", noteLoraSelectionChanged);
     const handle = $(".drag-handle", fragment);
     handle.addEventListener("keydown", (event) => moveLoraWithKeyboard(event, row));
     row.draggable = true;
     row.addEventListener("dragstart", () => row.classList.add("is-dragging"));
-    row.addEventListener("dragend", () => row.classList.remove("is-dragging"));
+    row.addEventListener("dragend", () => {
+      row.classList.remove("is-dragging");
+      noteLoraSelectionChanged();
+    });
     row.addEventListener("dragover", reorderLoraOnDrag);
     loraList.append(fragment);
     return row;
@@ -369,6 +499,7 @@
     if (event.key === "ArrowUp" && row.previousElementSibling) loraList.insertBefore(row, row.previousElementSibling);
     if (event.key === "ArrowDown" && row.nextElementSibling) loraList.insertBefore(row.nextElementSibling, row);
     $(".drag-handle", row).focus();
+    noteLoraSelectionChanged();
   }
 
   function reorderLoraOnDrag(event) {
@@ -400,7 +531,7 @@
     if (!settings || typeof settings !== "object") return;
     if (settings.width) $("#width").value = settings.width;
     if (settings.height) $("#height").value = settings.height;
-    syncAspectFromDimensions();
+    syncCanvasIndicators();
     const preset = $(`input[name="preset"][value="${safeSelectorValue(settings.preset || "turbo8")}"]`);
     if (preset && !preset.disabled) {
       preset.checked = true;
@@ -429,11 +560,7 @@
       model_id: modelSelect.value,
       steps: Number($("#steps").value),
       guidance_scale: Number($("#guidance").value),
-      loras: $$(".lora-row", loraList).map((row) => ({
-        id: $(".lora-select", row).value,
-        weight: Number($(".lora-weight", row).value),
-        enabled: $(".lora-enabled", row).checked,
-      })),
+      loras: collectLoraSelection(),
       attention_backend: $("#attentionBackend").value,
     };
   }
@@ -441,7 +568,7 @@
   function validateRequest(request) {
     if (!request.prompt) return "プロンプトを入力してください";
     if (!request.model_id) return "利用するモデルを選択してください";
-    if (request.width % 32 || request.height % 32) return "幅と高さは32の倍数にしてください";
+    if (request.width % 16 || request.height % 16) return "幅と高さは16の倍数にしてください";
     if (request.preset === "fast4" && !state.fast4LoraId) return "Turbo 4 に必要な蒸留 LoRA が見つかりません";
     const duplicateIds = request.loras.filter((item) => item.enabled).map((item) => item.id);
     if (new Set(duplicateIds).size !== duplicateIds.length) return "同じ LoRA を複数回有効にはできません";
@@ -459,6 +586,7 @@
 
   async function generate() {
     clearError();
+    window.clearTimeout(state.loraApplyTimer);
     const request = collectRequest();
     const validationError = validateRequest(request);
     if (validationError) {
@@ -501,8 +629,140 @@
     };
   }
 
+  function collectLoraSelection() {
+    return $$(".lora-row", loraList).map((row) => ({
+      id: $(".lora-select", row).value,
+      weight: Number($(".lora-weight", row).value),
+      enabled: $(".lora-enabled", row).checked,
+    }));
+  }
+
+  function controlRequest(revision) {
+    return {
+      model_id: modelSelect.value,
+      preset: selectedPreset(),
+      attention_backend: $("#attentionBackend").value,
+      loras: collectLoraSelection(),
+      selection_revision: revision,
+    };
+  }
+
+  async function loadSelectedModel() {
+    if (!state.connected || !modelSelect.value || state.activeJobId || state.controlJobs.size) return;
+    window.clearTimeout(state.loraApplyTimer);
+    state.selectionRevision += 1;
+    state.pendingLoraApply = false;
+    state.controlError = null;
+    const revision = state.selectionRevision;
+    await submitControlJob("/api/load-model", "model_load", revision, controlRequest(revision));
+  }
+
+  function noteLoraSelectionChanged() {
+    state.selectionRevision += 1;
+    state.pendingLoraApply = true;
+    state.controlError = null;
+    window.clearTimeout(state.loraApplyTimer);
+    updateModelRuntimeUI();
+    if (!canAutoApplyLoras()) return;
+    state.loraApplyTimer = window.setTimeout(applySelectedLoras, 500);
+  }
+
+  function canAutoApplyLoras() {
+    const modelLoadActive = [...state.controlJobs.values()].some((job) => job.operation === "model_load");
+    return state.connected
+      && !state.activeJobId
+      && !modelLoadActive
+      && modelSelect.value === state.loadedModelId
+      && selectedPreset() === state.loadedPreset
+      && attentionSelectionMatchesLoaded();
+  }
+
+  async function applySelectedLoras() {
+    if (!state.pendingLoraApply || !canAutoApplyLoras()) {
+      updateModelRuntimeUI();
+      return;
+    }
+    const revision = state.selectionRevision;
+    state.pendingLoraApply = false;
+    await submitControlJob("/api/load-loras", "loras_load", revision, controlRequest(revision));
+  }
+
+  async function submitControlJob(path, operation, revision, request) {
+    try {
+      const response = await api(path, { method: "POST", body: request, timeout: 30000 });
+      const jobRevision = Number(response.selection_revision) || revision;
+      state.controlJobs.set(response.job_id, { operation, revision: jobRevision, modelId: request.model_id });
+      updateModelRuntimeUI();
+      pollControlJob(response.job_id);
+    } catch (error) {
+      if (revision === state.selectionRevision) state.controlError = error.message;
+      if (operation === "loras_load") state.pendingLoraApply = true;
+      updateModelRuntimeUI();
+    }
+  }
+
+  function trackControlJob(jobId, revision, operation) {
+    state.controlJobs.set(jobId, { operation, revision, modelId: modelSelect.value });
+    updateModelRuntimeUI();
+    pollControlJob(jobId);
+  }
+
+  async function pollControlJob(jobId) {
+    const tracked = state.controlJobs.get(jobId);
+    if (!tracked) return;
+    try {
+      const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`, { timeout: 10000 });
+      const revision = Number(job.selection_revision ?? job.result?.selection_revision ?? tracked.revision) || 0;
+      if (job.status === "completed") {
+        if (revision >= state.appliedRevision) {
+          const result = job.result || {};
+          state.loadedModelId = result.model_id || tracked.modelId || state.loadedModelId;
+          state.loadedPreset = result.preset || state.loadedPreset;
+          state.loadedAttentionBackend = result.attention_backend || state.loadedAttentionBackend;
+          state.loadedLoras = Array.isArray(result.loras) ? result.loras : state.loadedLoras;
+          state.appliedRevision = revision;
+        }
+        state.controlJobs.delete(jobId);
+        state.controlPollTimers.delete(jobId);
+        if (revision === state.selectionRevision) {
+          state.pendingLoraApply = false;
+          state.controlError = null;
+        }
+        updateModelRuntimeUI();
+        if (state.pendingLoraApply && canAutoApplyLoras()) {
+          window.clearTimeout(state.loraApplyTimer);
+          state.loraApplyTimer = window.setTimeout(applySelectedLoras, 150);
+        }
+        return;
+      }
+      if (job.status === "failed" || job.status === "cancelled") {
+        state.controlJobs.delete(jobId);
+        state.controlPollTimers.delete(jobId);
+        let errorMessage = null;
+        if (revision === state.selectionRevision) {
+          errorMessage = job.status === "cancelled" ? "設定の適用を中止しました" : (job.error?.message || job.message || "設定を適用できませんでした");
+          state.controlError = errorMessage;
+          state.pendingLoraApply = tracked.operation === "loras_load";
+        }
+        updateModelRuntimeUI();
+        api("/api/state").then((engineState) => {
+          syncLoadedState(engineState);
+          if (errorMessage && revision === state.selectionRevision) state.controlError = errorMessage;
+          updateModelRuntimeUI();
+        }).catch(() => {});
+        return;
+      }
+    } catch (error) {
+      if (tracked.revision === state.selectionRevision) state.controlError = error.message;
+      updateModelRuntimeUI();
+    }
+    const timer = window.setTimeout(() => pollControlJob(jobId), 600);
+    state.controlPollTimers.set(jobId, timer);
+  }
+
   async function upscaleSelected() {
     clearError();
+    window.clearTimeout(state.loraApplyTimer);
     const source = state.upscaleSourceItem;
     const sourceUrl = source?.result?.image_url || source?.image_url;
     if (!sourceUrl) {
@@ -517,11 +777,7 @@
       prompt: $("#prompt").value.trim() || undefined,
       negative_prompt: $("#negativePrompt").value.trim() || undefined,
       seed: source.result?.seed ?? source.seed ?? undefined,
-      loras: $$(".lora-row", loraList).map((row) => ({
-        id: $(".lora-select", row).value,
-        weight: Number($(".lora-weight", row).value),
-        enabled: $(".lora-enabled", row).checked,
-      })),
+      loras: collectLoraSelection(),
     };
     try {
       const job = await api("/api/upscale", { method: "POST", body: request, timeout: 30000 });
@@ -604,6 +860,13 @@
     generationOverlay.hidden = true;
     $("#activeJob").hidden = true;
     updateGenerateAvailability();
+    api("/api/state").then((engineState) => {
+      syncLoadedState(engineState);
+      if (state.pendingLoraApply && canAutoApplyLoras()) {
+        window.clearTimeout(state.loraApplyTimer);
+        state.loraApplyTimer = window.setTimeout(applySelectedLoras, 150);
+      }
+    }).catch(() => {});
   }
 
   async function cancelJob() {
@@ -755,6 +1018,7 @@
     $("#negativePrompt").value = request.negative_prompt || "";
     $("#width").value = request.width || 1024;
     $("#height").value = request.height || 1024;
+    syncCanvasIndicators();
     $("#seed").value = item?.result?.seed ?? request.seed ?? -1;
     const modelId = request.model_id || request.model?.id;
     if (modelId && state.models.some((model) => model.id === modelId && model.available)) modelSelect.value = modelId;
@@ -773,6 +1037,7 @@
     if (hires.refine_steps) $("#refineSteps").value = hires.refine_steps;
     if (hires.denoise_strength) $("#refineStrength").value = hires.denoise_strength;
     updatePromptCount();
+    updateModelRuntimeUI();
     return true;
   }
 
@@ -787,8 +1052,8 @@
     applyItemSettings(item);
     setUpscaleSource(item);
     setMode("upscale");
-    if (window.innerWidth <= 760) form.scrollIntoView({ behavior: "smooth", block: "start" });
-    else form.scrollTo({ top: 0, behavior: "smooth" });
+    if (window.innerWidth <= 760 || window.innerHeight <= 400) form.scrollIntoView({ behavior: "smooth", block: "start" });
+    else $("#controlScroll").scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function renderMetadata(item) {
@@ -818,7 +1083,7 @@
     }
     setMode("generate");
     clearError();
-    if (window.innerWidth <= 760) form.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (window.innerWidth <= 760 || window.innerHeight <= 400) form.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function openOutputFolder() {
@@ -833,32 +1098,68 @@
     $("#promptCount").textContent = `${$("#prompt").value.length} / 2000`;
   }
 
-  function syncAspectFromDimensions() {
+  function syncCanvasIndicators() {
     const width = Number($("#width").value);
     const height = Number($("#height").value);
-    const ratios = { "1:1": 1, "4:5": .8, "3:2": 1.5, "16:9": 16 / 9 };
-    const match = Object.entries(ratios).find(([, ratio]) => Math.abs(width / height - ratio) < .015);
-    const current = $("input[name='aspect']:checked");
-    if (match) $(`input[name="aspect"][value="${match[0]}"]`).checked = true;
-    else if (current) current.checked = false;
+    const orientation = width === height ? "square" : (height > width ? "portrait" : "landscape");
+    const orientationInput = $(`input[name="orientation"][value="${orientation}"]`);
+    if (orientationInput) orientationInput.checked = true;
+    const matchIndex = CANVAS_PRESETS[orientation].findIndex((preset) => preset.width === width && preset.height === height);
+    if (matchIndex >= 0 && orientation !== "square") state.sizePresetIndex = matchIndex;
+    renderSizePresets(orientation, matchIndex >= 0 ? matchIndex : null);
+    const custom = $("#customSizeNote");
+    custom.hidden = matchIndex >= 0;
+    custom.textContent = matchIndex >= 0 ? "" : `カスタムサイズ · ${width} × ${height}`;
   }
 
-  function applyAspect(value) {
-    const sizes = { "1:1": [1024, 1024], "4:5": [896, 1120], "3:2": [1216, 832], "16:9": [1344, 768] };
-    const [width, height] = sizes[value] || sizes["1:1"];
-    $("#width").value = width;
-    $("#height").value = height;
+  function renderSizePresets(orientation, selectedIndex) {
+    const root = $("#sizePresetGrid");
+    root.replaceChildren();
+    root.classList.toggle("is-square", orientation === "square");
+    CANVAS_PRESETS[orientation].forEach((preset, index) => {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "size_preset";
+      input.value = String(index);
+      input.checked = index === selectedIndex;
+      input.addEventListener("change", () => applySizePreset(orientation, index));
+      const content = document.createElement("span");
+      const ratio = document.createElement("strong");
+      const dimensions = document.createElement("small");
+      ratio.textContent = preset.ratio;
+      dimensions.textContent = `${preset.width} × ${preset.height}`;
+      content.append(ratio, dimensions);
+      label.append(input, content);
+      root.append(label);
+    });
+  }
+
+  function applySizePreset(orientation, index) {
+    const preset = CANVAS_PRESETS[orientation]?.[index];
+    if (!preset) return;
+    if (orientation !== "square") state.sizePresetIndex = index;
+    $("#width").value = preset.width;
+    $("#height").value = preset.height;
+    $("#customSizeNote").hidden = true;
+  }
+
+  function applyOrientation(orientation) {
+    const index = orientation === "square" ? 0 : Math.min(state.sizePresetIndex, CANVAS_PRESETS[orientation].length - 1);
+    renderSizePresets(orientation, index);
+    applySizePreset(orientation, index);
   }
 
   function resetForm() {
     form.reset();
     loraList.replaceChildren();
-    applyAspect("1:1");
+    applyOrientation("square");
     applyPreset("turbo8");
     $("#negativeWrap").hidden = true;
     $("#toggleNegative").setAttribute("aria-expanded", "false");
     updatePromptCount();
     clearError();
+    noteLoraSelectionChanged();
   }
 
   function filenameFromUrl(url) {
@@ -891,7 +1192,10 @@
     event.currentTarget.setAttribute("aria-expanded", String(!expanded));
     $("#metadataPanel").hidden = expanded;
   });
-  $("#addLora").addEventListener("click", () => addLoraRow());
+  $("#addLora").addEventListener("click", () => {
+    if (addLoraRow()) noteLoraSelectionChanged();
+  });
+  $("#loadModel").addEventListener("click", loadSelectedModel);
   $("#cancelButton").addEventListener("click", cancelJob);
   $("#reuseSettings").addEventListener("click", reuseSelectedSettings);
   $("#openInHires").addEventListener("click", () => openItemInHires());
@@ -911,12 +1215,21 @@
   modelSelect.addEventListener("change", () => {
     const model = state.models.find((item) => item.id === modelSelect.value);
     updateModelNote(model);
-    updateGenerateAvailability();
+    state.controlError = null;
+    updateModelRuntimeUI();
   });
-  $$("input[name='preset']").forEach((input) => input.addEventListener("change", () => applyPreset(input.value)));
-  $$("input[name='aspect']").forEach((input) => input.addEventListener("change", () => applyAspect(input.value)));
-  $("#width").addEventListener("change", syncAspectFromDimensions);
-  $("#height").addEventListener("change", syncAspectFromDimensions);
+  $$("input[name='preset']").forEach((input) => input.addEventListener("change", () => {
+    applyPreset(input.value);
+    state.controlError = null;
+    updateModelRuntimeUI();
+  }));
+  $("#attentionBackend").addEventListener("change", () => {
+    state.controlError = null;
+    updateModelRuntimeUI();
+  });
+  $$("input[name='orientation']").forEach((input) => input.addEventListener("change", () => applyOrientation(input.value)));
+  $("#width").addEventListener("input", syncCanvasIndicators);
+  $("#height").addEventListener("input", syncCanvasIndicators);
   $("#openSettings").addEventListener("click", () => $("#settingsDialog").showModal());
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !generateButton.disabled) {
@@ -926,5 +1239,6 @@
   });
 
   updatePromptCount();
+  renderSizePresets("square", 0);
   connect();
 })();

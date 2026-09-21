@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import importlib.util
 import os
 from pathlib import Path
 import queue
+import subprocess
 import webbrowser
 from urllib.parse import urlparse
 
@@ -50,7 +52,7 @@ async def local_only(request, handler):
         expected_port = int(request.app["config"]["server"]["port"])
         if parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.port not in {None, expected_port}:
             return error("forbidden_origin", "Cross-origin requests are not accepted", 403)
-    if request.path in {"/api/generate", "/api/upscale", "/api/settings"} and request.method in {"POST", "PUT", "PATCH"}:
+    if request.path in {"/api/generate", "/api/upscale", "/api/load-model", "/api/load-loras", "/api/settings"} and request.method in {"POST", "PUT", "PATCH"}:
         if request.content_type != "application/json":
             return error("unsupported_media_type", "Content-Type must be application/json", 415)
     return await handler(request)
@@ -74,17 +76,18 @@ def create_app(config=None, engine=None) -> web.Application:
         raw = any(x["available"] and x["family"] == "raw" for x in models)
         fast_id = discover_loras(config).get("fast4_lora_id")
         upscaler_path = Path(config["paths"]["upscaler"])
-        try:
-            import spandrel  # noqa: F401
-            upscaler_available = upscaler_path.is_file()
+        spandrel_installed = importlib.util.find_spec("spandrel") is not None
+        upscaler_available = spandrel_installed and upscaler_path.is_file()
+        if not spandrel_installed:
+            upscaler_reason = "Spandrel is unavailable."
+        else:
             upscaler_reason = None if upscaler_available else f"Model was not found: {upscaler_path}"
-        except ImportError as exc:
-            upscaler_available, upscaler_reason = False, f"Spandrel is unavailable: {exc}"
         return web.json_response({
             "engine": "krea2-studio", "version": __version__,
             "device": device_info(),
             "features": {
                 "hires": True, "metadata": ["png_itxt", "exif_user_comment", "json_sidecar"],
+                "explicit_model_loading": True, "automatic_lora_loading": True,
                 "attention_backends": ["sdpa", "sage2"],
                 "upscaler": {
                     "backend": "spandrel" if upscaler_available else "pillow_lanczos",
@@ -118,6 +121,18 @@ def create_app(config=None, engine=None) -> web.Application:
         except queue.Full:
             return error("queue_full", "The generation queue is full", 429)
         return web.json_response(result, status=202)
+    async def load_model(request):
+        try:
+            result = manager.submit(await request.json(), operation="model_load")
+        except queue.Full:
+            return error("queue_full", "The engine queue is full", 429)
+        return web.json_response(result, status=202)
+    async def load_loras(request):
+        try:
+            result = manager.submit(await request.json(), operation="loras_load")
+        except queue.Full:
+            return error("queue_full", "The engine queue is full", 429)
+        return web.json_response(result, status=202)
     async def get_job(request): return web.json_response(manager.get(request.match_info["job_id"]))
     async def cancel_job(request): return web.json_response(manager.cancel(request.match_info["job_id"]))
     async def history(request): return web.json_response({"items": manager.history(int(request.query.get("limit", 50)))})
@@ -142,6 +157,8 @@ def create_app(config=None, engine=None) -> web.Application:
     app.router.add_put("/api/settings", put_settings)
     app.router.add_post("/api/generate", generate)
     app.router.add_post("/api/upscale", upscale_image)
+    app.router.add_post("/api/load-model", load_model)
+    app.router.add_post("/api/load-loras", load_loras)
     app.router.add_get("/api/jobs/{job_id}", get_job)
     app.router.add_post("/api/jobs/{job_id}/cancel", cancel_job)
     app.router.add_get("/api/history", history)
@@ -164,11 +181,14 @@ def create_app(config=None, engine=None) -> web.Application:
 
 def device_info():
     try:
-        import torch
-        if torch.cuda.is_available():
-            props = torch.cuda.get_device_properties(0)
-            return {"type": "cuda", "name": props.name, "vram_bytes": props.total_memory, "capability": list(torch.cuda.get_device_capability(0))}
-    except Exception:
+        completed = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits", "-i", "0"],
+            capture_output=True, text=True, timeout=3, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        name, memory_mib = [part.strip() for part in completed.stdout.strip().split(",", 1)]
+        return {"type": "cuda", "name": name, "vram_bytes": int(memory_mib) * 1024 * 1024, "capability": None}
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return {"type": "unavailable", "name": None, "vram_bytes": None, "capability": None}
 

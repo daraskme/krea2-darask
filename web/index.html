@@ -28,6 +28,7 @@
 
       <main class="workspace">
         <form class="control-panel" id="generationForm">
+          <div class="control-scroll" id="controlScroll">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Create</p>
@@ -64,12 +65,19 @@
               <button class="text-button" id="refreshModels" type="button">再読込</button>
             </div>
             <label class="field-label" for="model">モデル</label>
-            <div class="select-wrap">
-              <select id="model" name="model" required disabled>
-                <option value="">モデルを確認中…</option>
-              </select>
+            <div class="model-load-grid">
+              <div class="select-wrap">
+                <select id="model" name="model" required disabled>
+                  <option value="">モデルを確認中…</option>
+                </select>
+              </div>
+              <button class="model-load-button" id="loadModel" type="button" disabled>読み込む</button>
             </div>
             <div class="field-note" id="modelNote">ローカルモデルのみを使用します</div>
+            <div class="model-runtime-status" id="modelRuntimeStatus" role="status" aria-live="polite">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="modelRuntimeText">GPUモデル未読込</span>
+            </div>
 
             <div class="preset-group" role="radiogroup" aria-label="生成プリセット">
               <label class="preset-card">
@@ -98,15 +106,16 @@
 
           <section class="form-section" aria-labelledby="canvasHeading">
             <h2 id="canvasHeading">キャンバス</h2>
-            <div class="aspect-grid" role="radiogroup" aria-label="縦横比">
-              <label><input type="radio" name="aspect" value="1:1" checked /><span><i class="ratio-shape square"></i>1:1</span></label>
-              <label><input type="radio" name="aspect" value="4:5" /><span><i class="ratio-shape portrait"></i>4:5</span></label>
-              <label><input type="radio" name="aspect" value="3:2" /><span><i class="ratio-shape landscape"></i>3:2</span></label>
-              <label><input type="radio" name="aspect" value="16:9" /><span><i class="ratio-shape wide"></i>16:9</span></label>
+            <div class="orientation-grid" role="radiogroup" aria-label="キャンバスの向き">
+              <label><input type="radio" name="orientation" value="portrait" /><span><i class="ratio-shape portrait"></i>縦長</span></label>
+              <label><input type="radio" name="orientation" value="landscape" /><span><i class="ratio-shape landscape"></i>横長</span></label>
+              <label><input type="radio" name="orientation" value="square" checked /><span><i class="ratio-shape square"></i>正方形</span></label>
             </div>
+            <div class="size-preset-grid" id="sizePresetGrid" role="radiogroup" aria-label="サイズプリセット"></div>
+            <div class="custom-size-note" id="customSizeNote" hidden></div>
             <div class="field-grid two-column">
-              <label><span>幅</span><input id="width" name="width" type="number" min="256" max="4096" step="32" value="1024" inputmode="numeric" /></label>
-              <label><span>高さ</span><input id="height" name="height" type="number" min="256" max="4096" step="32" value="1024" inputmode="numeric" /></label>
+              <label><span>幅</span><input id="width" name="width" type="number" min="256" max="4096" step="16" value="1024" inputmode="numeric" /></label>
+              <label><span>高さ</span><input id="height" name="height" type="number" min="256" max="4096" step="16" value="1024" inputmode="numeric" /></label>
             </div>
             <div class="seed-row">
               <label for="seed">シード</label>
@@ -166,6 +175,7 @@
                 <p id="upscalerNote">利用できるアップスケーラを確認中…</p>
               </div>
             </section>
+          </div>
           </div>
 
           <div class="generate-dock">

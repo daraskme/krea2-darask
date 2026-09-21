@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import gc
 import importlib.metadata
 import json
+import copy
 import secrets
 from pathlib import Path
 import time
@@ -31,12 +32,16 @@ class KreaEngine:
         self.attention_reason: str | None = None
         self._attention_processor = None
         self.active_loras: list[dict[str, Any]] = []
+        self.loaded_preset: str | None = None
+        self.selection_revision: int | None = None
         self.cache = PromptEmbeddingCache(config["engine"]["embedding_cache_size"])
 
     def close(self) -> None:
         self.pipe = None
         self.model_id = None
         self.active_loras.clear()
+        self.loaded_preset = None
+        self.selection_revision = None
         self.cache.clear()
         clear_upscaler_cache()
         self._attention_processor = None
@@ -131,13 +136,22 @@ class KreaEngine:
         elif selected_distillers:
             raise ValueError("Distillation adapters are only accepted by the fast4 preset")
 
-        try:
-            self.pipe.unload_lora_weights()
+        if selected == self.active_loras:
+            return copy.deepcopy(selected)
+        previous = copy.deepcopy(self.active_loras)
+        prepared = [(entry, load_lora_file(resolve_lora(self.config, entry["id"]))) for entry in selected]
+
+        def install(entries_and_states):
+            try:
+                self.pipe.unload_lora_weights()
+            except Exception:
+                self.active_loras = []
+                raise
+            self.active_loras = []
             names: list[str] = []
             weights: list[float] = []
-            for index, entry in enumerate(selected):
+            for index, (entry, state) in enumerate(entries_and_states):
                 name = f"adapter_{index}"
-                state = load_lora_file(resolve_lora(self.config, entry["id"]))
                 self.pipe.load_lora_weights(state, adapter_name=name)
                 if name not in getattr(self.pipe.transformer, "peft_config", {}):
                     raise ValueError(f"LoRA {entry['id']} did not register compatible transformer layers")
@@ -145,12 +159,93 @@ class KreaEngine:
                 weights.append(entry["weight"])
             if names:
                 self.pipe.set_adapters(names, adapter_weights=weights)
-        except Exception:
-            self.pipe.unload_lora_weights()
-            self.active_loras = []
+
+        try:
+            install(prepared)
+        except Exception as original:
+            try:
+                rollback = [(entry, load_lora_file(resolve_lora(self.config, entry["id"]))) for entry in previous]
+                install(rollback)
+                self.active_loras = previous
+            except Exception as rollback_error:
+                # The pipeline may now contain a partially installed adapter.
+                # Drop it completely so an empty active_loras list can never
+                # be mistaken for a known-clean loaded pipeline.
+                self.close()
+                raise RuntimeError(f"LoRA update failed and rollback failed: {rollback_error}") from original
             raise
-        self.active_loras = selected
-        return selected
+        self.active_loras = copy.deepcopy(selected)
+        return copy.deepcopy(selected)
+
+    def _resolve_control_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(request.get("model_id", "")).strip()
+        if not model_id:
+            raise ValueError("model_id is required")
+        spec = get_model_spec(self.config, model_id)
+        model = next((item for item in discover_models(self.config)["items"] if item["id"] == model_id), None)
+        if model is None or not model["available"]:
+            raise ValueError((model or {}).get("reason", f"Model is unavailable: {model_id}"))
+        preset = str(request.get("preset", "turbo8"))
+        if preset not in {"turbo8", "fast4", "raw"}:
+            raise ValueError(f"Unknown preset: {preset}")
+        expected_family = "raw" if preset == "raw" else "turbo"
+        if spec["family"] != expected_family:
+            raise ValueError(f"The {preset} preset requires a registered {expected_family} model")
+        backend = str(request.get("attention_backend", self.config["engine"]["attention_backend"]))
+        if backend not in {"auto", "sdpa", "sage2"}:
+            raise ValueError(f"Unknown attention backend: {backend}")
+        loras = request.get("loras", [])
+        if not isinstance(loras, list) or any(not isinstance(item, dict) for item in loras):
+            raise ValueError("loras must be an array of objects")
+        revision = request.get("selection_revision")
+        if revision is not None:
+            revision = int(revision)
+            if revision < 0:
+                raise ValueError("selection_revision must be non-negative")
+        return {
+            "model_id": model_id, "preset": preset, "attention_backend": backend,
+            "loras": copy.deepcopy(loras), "selection_revision": revision,
+        }
+
+    def preload(
+        self, request: dict[str, Any], progress: Callable[[float, str, str], None], cancelled: Callable[[], bool]
+    ) -> dict[str, Any]:
+        resolved = self._resolve_control_request(request)
+        started = time.perf_counter()
+        progress(0.05, "loading", "モデルを読み込み中")
+        self._load_model(resolved["model_id"])
+        if cancelled():
+            raise GenerationCancelled()
+        self._set_attention(resolved["attention_backend"])
+        progress(0.75, "configuring", "LoRAを反映中")
+        active = self._configure_loras(resolved["loras"], resolved["preset"])
+        self.loaded_preset = resolved["preset"]
+        self.selection_revision = resolved["selection_revision"]
+        return {
+            "loaded": True, "model_id": self.model_id, "preset": self.loaded_preset,
+            "attention_backend": self.attention_backend, "loras": active,
+            "selection_revision": self.selection_revision, "elapsed_seconds": round(time.perf_counter() - started, 3),
+        }
+
+    def load_loras(
+        self, request: dict[str, Any], progress: Callable[[float, str, str], None], cancelled: Callable[[], bool]
+    ) -> dict[str, Any]:
+        resolved = self._resolve_control_request(request)
+        if self.pipe is None or self.model_id != resolved["model_id"]:
+            raise ValueError("Load the selected model before applying LoRAs")
+        started = time.perf_counter()
+        if cancelled():
+            raise GenerationCancelled()
+        progress(0.2, "configuring", "LoRAを読み込み中")
+        self._set_attention(resolved["attention_backend"])
+        active = self._configure_loras(resolved["loras"], resolved["preset"])
+        self.loaded_preset = resolved["preset"]
+        self.selection_revision = resolved["selection_revision"]
+        return {
+            "loaded": True, "model_id": self.model_id, "preset": self.loaded_preset,
+            "attention_backend": self.attention_backend, "loras": active,
+            "selection_revision": self.selection_revision, "elapsed_seconds": round(time.perf_counter() - started, 3),
+        }
 
     def _embeds(self, prompt: str, max_length: int = 512):
         import torch
@@ -184,6 +279,11 @@ class KreaEngine:
         if hasattr(self._attention_processor, "fallback_count"):
             self._attention_processor.fallback_count = 0
         active_loras = self._configure_loras(resolved["loras"], resolved["preset"])
+        self.loaded_preset = resolved["preset"]
+        # A generation request owns an immutable adapter snapshot that may differ
+        # from the latest UI selection. Keep the actual adapters visible, but do
+        # not claim that a UI selection revision is still applied.
+        self.selection_revision = None
         if max(resolved["width"], resolved["height"]) >= int(self.config["engine"]["vae_tiling_threshold"]):
             self.pipe.vae.enable_tiling()
         else:
@@ -266,6 +366,8 @@ class KreaEngine:
         if hasattr(self._attention_processor, "fallback_count"):
             self._attention_processor.fallback_count = 0
         active_loras = self._configure_loras(resolved["loras"], "turbo8")
+        self.loaded_preset = "turbo8"
+        self.selection_revision = None
         if cancelled():
             raise GenerationCancelled()
         prompt_embeds, prompt_mask = self._embeds(resolved["prompt"])

@@ -22,15 +22,16 @@ class JobManager:
         self.max_pending = max_pending
         self.jobs: dict[str, dict[str, Any]] = {}
         self._cancel: dict[str, threading.Event] = {}
-        self._queue: queue.Queue[str | None] = queue.Queue(maxsize=max_pending)
+        self._queue: queue.Queue[str | None] = queue.Queue()
         self._lock = threading.RLock()
         self._active_id: str | None = None
         self._stopping = threading.Event()
+        self._desired_selection_revision: int | None = None
         self._thread = threading.Thread(target=self._worker, name="krea2-gpu-worker", daemon=True)
         self._thread.start()
 
     def submit(self, request: dict[str, Any], operation: str = "generate") -> dict[str, Any]:
-        if operation not in {"generate", "upscale"}:
+        if operation not in {"generate", "upscale", "model_load", "loras_load"}:
             raise ValueError(f"Unknown operation: {operation}")
         job_id = uuid.uuid4().hex
         with self._lock:
@@ -38,9 +39,27 @@ class JobManager:
             for old_id in finished[:-500]:
                 self.jobs.pop(old_id, None)
                 self._cancel.pop(old_id, None)
-            if self._queue.full():
+            if operation in {"model_load", "loras_load"}:
+                revision = request.get("selection_revision")
+                if revision is not None:
+                    revision = int(revision)
+                    if revision < 0:
+                        raise ValueError("selection_revision must be non-negative")
+                    if self._desired_selection_revision is not None and revision < self._desired_selection_revision:
+                        raise ValueError(
+                            f"Stale selection_revision {revision}; latest is {self._desired_selection_revision}"
+                        )
+                superseded = {"loras_load"} if operation == "loras_load" else {"model_load", "loras_load"}
+                for old_id, old_job in self.jobs.items():
+                    if old_job["status"] == "queued" and old_job.get("operation") in superseded:
+                        self._cancel[old_id].set()
+                        old_job.update(status="cancelled", stage="superseded", message="新しい選択で置き換え済み", completed_at=_now())
+                if revision is not None:
+                    self._desired_selection_revision = max(self._desired_selection_revision or revision, revision)
+            pending = sum(1 for value in self.jobs.values() if value["status"] == "queued")
+            if pending >= self.max_pending:
                 raise queue.Full()
-            position = self._queue.qsize() + (1 if self._active_id else 0)
+            position = pending + (1 if self._active_id else 0)
             self.jobs[job_id] = {
                 "id": job_id, "status": "queued", "progress": 0.0, "stage": "queued", "message": "待機中",
                 "created_at": _now(), "started_at": None, "completed_at": None,
@@ -48,7 +67,10 @@ class JobManager:
             }
             self._cancel[job_id] = threading.Event()
             self._queue.put_nowait(job_id)
-        return {"job_id": job_id, "status": "queued", "position": position}
+        return {
+            "job_id": job_id, "status": "queued", "position": position, "operation": operation,
+            "selection_revision": request.get("selection_revision"),
+        }
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -73,16 +95,34 @@ class JobManager:
             active = self.jobs.get(self._active_id) if self._active_id else None
             status = "idle"
             if active:
-                status = "loading" if active["stage"] == "loading" else "generating"
+                operation = active.get("operation", "generate")
+                if operation == "model_load":
+                    status = "loading"
+                elif operation == "loras_load":
+                    status = "configuring"
+                else:
+                    status = "loading" if active["stage"] == "loading" else "generating"
+            else:
+                operation = None
             return {
-                "status": status, "active_job_id": self._active_id, "queue_length": self._queue.qsize(),
-                "model_id": self.engine.model_id, "attention_backend": self.engine.attention_backend,
+                "status": status, "active_job_id": self._active_id,
+                "queue_length": sum(1 for value in self.jobs.values() if value["status"] == "queued"),
+                "operation": operation, "model_id": self.engine.model_id, "loaded_model_id": self.engine.model_id,
+                "loaded_loras": copy.deepcopy(getattr(self.engine, "active_loras", [])),
+                "loaded_preset": getattr(self.engine, "loaded_preset", None),
+                "selection_revision": getattr(self.engine, "selection_revision", None),
+                "requested_selection_revision": self._desired_selection_revision,
+                "attention_backend": self.engine.attention_backend,
                 "last_error": next((x["error"] for x in reversed(list(self.jobs.values())) if x["error"]), None),
             }
 
     def history(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
-            completed = [x for x in reversed(list(self.jobs.values())) if x["status"] == "completed"]
+            completed = [
+                x for x in reversed(list(self.jobs.values()))
+                if x["status"] == "completed" and x.get("operation") in {"generate", "upscale"}
+                and x.get("result", {}).get("image_url")
+            ]
             known_urls = {x.get("result", {}).get("image_url") for x in completed if x.get("result")}
         saved = []
         for sidecar in sorted(OUTPUT_ROOT.glob("*/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -138,16 +178,33 @@ class JobManager:
             if job_id is None:
                 return
             with self._lock:
-                job = self.jobs[job_id]
+                job = self.jobs.get(job_id)
+                if job is None:
+                    self._queue.task_done()
+                    continue
                 if job["status"] == "cancelled":
                     self._queue.task_done()
                     continue
                 self._active_id = job_id
-                job.update(status="loading", stage="loading", message="モデルを準備中", started_at=_now())
+                operation = job.get("operation", "generate")
+                initial_stage = "configuring" if operation == "loras_load" else "loading"
+                initial_message = "LoRAを読み込み中" if operation == "loras_load" else "モデルを準備中"
+                job.update(status="loading", stage=initial_stage, message=initial_message, started_at=_now())
                 request = copy.deepcopy(job["request"])
                 cancel_event = self._cancel[job_id]
             try:
-                execute = self.engine.upscale_existing if job.get("operation") == "upscale" else self.engine.generate
+                revision = request.get("selection_revision")
+                if operation in {"model_load", "loras_load"} and revision is not None:
+                    with self._lock:
+                        desired = self._desired_selection_revision
+                    if desired is not None and int(revision) < desired:
+                        raise GenerationCancelled()
+                execute = {
+                    "generate": self.engine.generate,
+                    "upscale": self.engine.upscale_existing,
+                    "model_load": self.engine.preload,
+                    "loras_load": self.engine.load_loras,
+                }[operation]
                 result = execute(
                     request,
                     lambda value, stage, message: self._update_progress(job_id, value, stage, message),
@@ -164,7 +221,7 @@ class JobManager:
             except Exception as exc:
                 with self._lock:
                     self.jobs[job_id].update(
-                        status="failed", stage="failed", message="生成に失敗しました", completed_at=_now(),
+                        status="failed", stage="failed", message="処理に失敗しました", completed_at=_now(),
                         error={"code": exc.__class__.__name__, "message": str(exc), "details": traceback.format_exc(limit=8)},
                     )
             finally:

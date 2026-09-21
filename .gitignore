@@ -16,7 +16,7 @@ web/test-results/
 
 # runtime
 outputs/
-models/**/*.safetensors
+models/
 bench/
 .inductor_cache/
 config.local.toml
