@@ -5,28 +5,28 @@ open_browser = true
 max_pending_jobs = 8
 
 [paths]
-model_root = "D:/comfyui-models"
-transformer_bf16 = "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_bf16.safetensors"
-transformer_int8 = "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors"
-raw_int8 = "D:/comfyui-models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors"
-text_encoder = "D:/comfyui-models/text_encoders/qwen3vl_4b_bf16.safetensors"
-vae = "D:/comfyui-models/vae/qwen_image_vae.safetensors"
-qwen_config = "C:/Users/micro/.cache/huggingface/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
-lora_root = "D:/comfyui-models/loras/krea2"
-upscaler = "D:/comfyui-models/upscale_models/4x-UltraSharpV2_Lite.safetensors"
+model_root = "models"
+transformer_bf16 = "models/diffusion_models/krea2/krea2_turbo_bf16.safetensors"
+transformer_int8 = "models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors"
+raw_int8 = "models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors"
+text_encoder = "models/text_encoders/qwen3vl_4b_bf16.safetensors"
+vae = "models/vae/qwen_image_vae.safetensors"
+qwen_config = "models/qwen3-vl-4b-instruct"
+lora_root = "models/loras/krea2"
+upscaler = "models/upscale_models/4x-UltraSharpV2_Lite.safetensors"
 
 [engine]
 default_model = "krea2-turbo-bf16"
-attention_backend = "auto"
+attention_backend = "sdpa"
 embedding_cache_size = 4
-vae_tiling_threshold = 1536
+vae_tiling_threshold = 2049
 
 # Register more explicitly identified Krea 2 models for model switching.
 # [[models]]
 # id = "another-krea2-turbo"
 # name = "Another local Krea 2 Turbo"
 # kind = "diffusers"
-# path = "D:/models/krea2-turbo-diffusers"
+# path = "models/krea2-turbo-diffusers"
 # family = "turbo"
 # distilled = true
 #
@@ -34,6 +34,6 @@ vae_tiling_threshold = 1536
 # id = "another-krea2-raw-bf16"
 # name = "Another local Krea 2 Raw BF16"
 # kind = "single_file_bf16"
-# path = "D:/models/krea2-raw-bf16.safetensors"
+# path = "models/krea2-raw-bf16.safetensors"
 # family = "raw"
 # distilled = false

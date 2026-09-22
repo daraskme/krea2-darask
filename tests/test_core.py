@@ -12,7 +12,7 @@ from PIL import Image, ExifTags
 
 from krea2_studio.config import OUTPUT_ROOT, safe_output_path, validate_settings
 from krea2_studio.jobs import JobManager
-from krea2_studio.loaders import PromptEmbeddingCache, normalize_krea_lora_state, transformer_source_key
+from krea2_studio.loaders import PromptEmbeddingCache, load_lora_file, normalize_krea_lora_state, transformer_source_key
 from krea2_studio.metadata import EXIF_USER_COMMENT, decode_user_comment, read_image_metadata, save_image
 
 
@@ -38,6 +38,19 @@ class MetadataTests(unittest.TestCase):
 
 
 class LoaderTests(unittest.TestCase):
+    def test_diffusers_lora_file_gains_pipeline_prefix(self):
+        import torch
+        from safetensors.torch import save_file
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "adapter.safetensors"
+            save_file({
+                "time_embed.linear_1.lora_A.weight": torch.ones(2, 3),
+                "time_embed.linear_1.lora_B.weight": torch.ones(3, 2),
+            }, str(path))
+            result = load_lora_file(path)
+        self.assertIn("transformer.time_embed.linear_1.lora_A.weight", result)
+        self.assertIn("transformer.time_embed.linear_1.lora_B.weight", result)
+
     def test_transformer_mapping_special_cases(self):
         self.assertEqual(transformer_source_key("transformer_blocks.2.scale_shift_table"), "blocks.2.mod.lin")
         self.assertEqual(transformer_source_key("transformer_blocks.4.attn.norm_q.weight"), "blocks.4.attn.qknorm.qnorm.scale")

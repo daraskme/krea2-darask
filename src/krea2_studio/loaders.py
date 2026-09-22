@@ -230,7 +230,13 @@ def _unflatten_krea_lora_key(key: str) -> str:
 def load_lora_file(path: Path) -> dict[str, Any]:
     from safetensors.torch import load_file
 
-    return normalize_krea_lora_state(load_file(str(path), device="cpu"))
+    state = normalize_krea_lora_state(load_file(str(path), device="cpu"))
+    # Diffusers Krea adapters may store transformer keys without the pipeline
+    # component prefix. Diffusers' pipeline loader requires that prefix.
+    prefixes = ("transformer_blocks.", "text_fusion.", "img_in.", "txt_in.",
+                "time_embed.", "time_mod_proj.", "final_layer.")
+    return {f"transformer.{key}" if key.startswith(prefixes) else key: value
+            for key, value in state.items()}
 
 
 class PromptEmbeddingCache:

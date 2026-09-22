@@ -14,38 +14,38 @@ OUTPUT_ROOT = (PROJECT_ROOT / "outputs").resolve()
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8189, "open_browser": True, "max_pending_jobs": 8},
     "paths": {
-        "model_root": "D:/comfyui-models",
-        "transformer_bf16": "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_bf16.safetensors",
-        "transformer_int8": "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors",
-        "raw_int8": "D:/comfyui-models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors",
-        "text_encoder": "D:/comfyui-models/text_encoders/qwen3vl_4b_bf16.safetensors",
-        "vae": "D:/comfyui-models/vae/qwen_image_vae.safetensors",
-        "qwen_config": str(Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen3-VL-4B-Instruct"),
-        "lora_root": "D:/comfyui-models/loras/krea2",
-        "upscaler": "D:/comfyui-models/upscale_models/4x-UltraSharpV2_Lite.safetensors",
+        "model_root": str(PROJECT_ROOT / "models"),
+        "transformer_bf16": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_turbo_bf16.safetensors"),
+        "transformer_int8": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors"),
+        "raw_int8": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors"),
+        "text_encoder": str(PROJECT_ROOT / "models/text_encoders/qwen3vl_4b_bf16.safetensors"),
+        "vae": str(PROJECT_ROOT / "models/vae/qwen_image_vae.safetensors"),
+        "qwen_config": str(PROJECT_ROOT / "models/qwen3-vl-4b-instruct"),
+        "lora_root": str(PROJECT_ROOT / "models/loras/krea2"),
+        "upscaler": str(PROJECT_ROOT / "models/upscale_models/4x-UltraSharpV2_Lite.safetensors"),
     },
     "engine": {
         "default_model": "krea2-turbo-bf16",
-        "attention_backend": "auto",
+        "attention_backend": "sdpa",
         "embedding_cache_size": 4,
-        "vae_tiling_threshold": 1536,
+        "vae_tiling_threshold": 2049,
     },
     "models": [
         {
             "id": "krea2-turbo-bf16", "name": "Krea 2 Turbo BF16", "kind": "single_file_bf16",
-            "path": "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_bf16.safetensors",
+            "path": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_turbo_bf16.safetensors"),
             "family": "turbo", "distilled": True,
         },
         {
             "id": "krea2-turbo-int8-convrot", "name": "Krea 2 Turbo INT8 ConvRot",
             "kind": "unsupported_quantized",
-            "path": "D:/comfyui-models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors",
+            "path": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_turbo_int8_convrot.safetensors"),
             "family": "turbo", "distilled": True,
             "reason": "ComfyUI ConvRot INT8 is not a Diffusers-compatible quantization format.",
         },
         {
             "id": "krea2-raw-int8-convrot", "name": "Krea 2 Raw INT8 ConvRot", "kind": "unsupported_quantized",
-            "path": "D:/comfyui-models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors",
+            "path": str(PROJECT_ROOT / "models/diffusion_models/krea2/krea2_raw_int8_convrot.safetensors"),
             "family": "raw", "distilled": False,
             "reason": "Only the local raw checkpoint is ConvRot INT8; no independent compatible loader is installed.",
         },
@@ -79,8 +79,8 @@ class SettingsStore:
     DEFAULTS = {
         "width": 1024,
         "height": 1024,
-        "preset": "turbo8",
-        "attention_backend": "auto",
+        "preset": "fast4",
+        "attention_backend": "sdpa",
         "hires": {"enabled": False, "scale": 1.5, "method": "lanczos", "refine_steps": 8, "denoise_strength": 0.3},
     }
 

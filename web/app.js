@@ -1154,7 +1154,7 @@
     form.reset();
     loraList.replaceChildren();
     applyOrientation("square");
-    applyPreset("turbo8");
+    applyPreset("fast4");
     $("#negativeWrap").hidden = true;
     $("#toggleNegative").setAttribute("aria-expanded", "false");
     updatePromptCount();
