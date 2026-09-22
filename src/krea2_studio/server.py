@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import io
+import secrets
+from datetime import datetime
 import importlib.util
 import os
 from pathlib import Path
@@ -12,9 +15,10 @@ import webbrowser
 from urllib.parse import urlparse
 
 from aiohttp import web
+from PIL import Image, UnidentifiedImageError
 
 from . import __version__
-from .config import OUTPUT_ROOT, PROJECT_ROOT, SettingsStore, load_config, safe_output_path
+from .config import PROJECT_ROOT, SettingsStore, load_config, output_root, output_url, safe_output_path
 from .discovery import discover_loras, discover_models
 from .engine import KreaEngine
 from .jobs import JobManager
@@ -52,7 +56,7 @@ async def local_only(request, handler):
         expected_port = int(request.app["config"]["server"]["port"])
         if parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.port not in {None, expected_port}:
             return error("forbidden_origin", "Cross-origin requests are not accepted", 403)
-    if request.path in {"/api/generate", "/api/upscale", "/api/load-model", "/api/load-loras", "/api/settings"} and request.method in {"POST", "PUT", "PATCH"}:
+    if request.path in {"/api/generate", "/api/upscale", "/api/load-model", "/api/load-loras", "/api/settings", "/api/open-storage-folder"} and request.method in {"POST", "PUT", "PATCH"}:
         if request.content_type != "application/json":
             return error("unsupported_media_type", "Content-Type must be application/json", 415)
     return await handler(request)
@@ -63,7 +67,7 @@ def create_app(config=None, engine=None) -> web.Application:
     engine = engine or KreaEngine(config)
     manager = JobManager(engine, int(config["server"]["max_pending_jobs"]))
     settings = SettingsStore()
-    app = web.Application(middlewares=[errors, local_only], client_max_size=1024 * 1024)
+    app = web.Application(middlewares=[errors, local_only], client_max_size=26 * 1024 * 1024)
     app["config"] = config
     app["jobs"] = manager
     app["settings"] = settings
@@ -108,7 +112,55 @@ def create_app(config=None, engine=None) -> web.Application:
     async def models(_): return web.json_response(discover_models(config))
     async def loras(_): return web.json_response(discover_loras(config))
     async def get_settings(_): return web.json_response(settings.load())
-    async def put_settings(request): return web.json_response(settings.save(await request.json()))
+    async def storage(_):
+        model_root = Path(config["paths"]["model_root"]).resolve()
+        lora_root = Path(config["paths"]["lora_root"]).resolve()
+        return web.json_response({
+            "model_root": str(model_root), "lora_root": str(lora_root),
+            "models": [{"id": item["id"], "name": item["name"], "path": str(Path(item["path"]).resolve())}
+                       for item in discover_models(config)["items"]],
+        })
+    async def open_storage_folder(request):
+        kind = str((await request.json()).get("kind", ""))
+        folders = {
+            "models": Path(config["paths"]["model_root"]).resolve(),
+            "loras": Path(config["paths"]["lora_root"]).resolve(),
+        }
+        if kind not in folders:
+            raise ValueError("Unknown storage folder")
+        folder = folders[kind]
+        folder.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(["xdg-open", str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return web.json_response({"opened": True, "path": str(folder)})
+    async def put_settings(request):
+        data = {**settings.load(), **await request.json()}
+        if data["output_dir"] != settings.load()["output_dir"]:
+            status = manager.state()
+            if status["active_job_id"] or status["queue_length"]:
+                return error("busy", "Wait for active jobs before changing the output directory", 409)
+        return web.json_response(settings.save(data))
+    async def import_image(request):
+        reader = await request.multipart()
+        part = await reader.next()
+        if part is None or part.name != "image":
+            return error("invalid_image", "Choose an image file")
+        chunks = bytearray()
+        while chunk := await part.read_chunk():
+            chunks.extend(chunk)
+            if len(chunks) > 25 * 1024 * 1024:
+                return error("too_large", "Image file must be at most 25 MiB", 413)
+        try:
+            with Image.open(io.BytesIO(chunks)) as opened:
+                if opened.width > 4096 or opened.height > 4096 or opened.width < 16 or opened.height < 16:
+                    return error("invalid_size", "Source image must be between 16 and 4096 pixels per side")
+                image = opened.convert("RGB")
+        except (UnidentifiedImageError, OSError, ValueError):
+            return error("invalid_image", "The file is not a supported image")
+        folder = output_root() / "imports" / datetime.now().strftime("%Y-%m-%d")
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"source_{secrets.token_hex(12)}.png"
+        await asyncio.to_thread(image.save, path, "PNG")
+        return web.json_response({"image_url": output_url(path), "width": image.width, "height": image.height, "filename": part.filename or "image"}, status=201)
     async def generate(request):
         try:
             result = manager.submit(await request.json())
@@ -142,10 +194,12 @@ def create_app(config=None, engine=None) -> web.Application:
             raise KeyError(request.match_info["path"])
         return web.FileResponse(path)
     async def open_output(_):
-        OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        root = output_root()
+        root.mkdir(parents=True, exist_ok=True)
         if os.name != "nt":
-            return error("unsupported", "Open folder is currently supported on Windows", 501)
-        os.startfile(OUTPUT_ROOT)  # type: ignore[attr-defined]
+            subprocess.Popen(["xdg-open", str(root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.startfile(root)  # type: ignore[attr-defined]
         return web.json_response({"opened": True})
 
     app.router.add_get("/health", health)
@@ -154,7 +208,10 @@ def create_app(config=None, engine=None) -> web.Application:
     app.router.add_get("/api/models", models)
     app.router.add_get("/api/loras", loras)
     app.router.add_get("/api/settings", get_settings)
+    app.router.add_get("/api/storage", storage)
+    app.router.add_post("/api/open-storage-folder", open_storage_folder)
     app.router.add_put("/api/settings", put_settings)
+    app.router.add_post("/api/import-image", import_image)
     app.router.add_post("/api/generate", generate)
     app.router.add_post("/api/upscale", upscale_image)
     app.router.add_post("/api/load-model", load_model)

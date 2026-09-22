@@ -72,7 +72,7 @@
     const timer = window.setTimeout(() => controller.abort(), options.timeout || 15000);
     try {
       const headers = new Headers(options.headers || {});
-      if (options.body && typeof options.body !== "string") {
+      if (options.body && typeof options.body !== "string" && !(options.body instanceof FormData)) {
         headers.set("Content-Type", "application/json");
         options.body = JSON.stringify(options.body);
       }
@@ -138,9 +138,11 @@
     setConnection(false, "エンジンを確認中");
     clearError();
     try {
-      const [capabilities, models, loras, engineState, settings] = await Promise.all([
-        api("/api/capabilities"), api("/api/models"), api("/api/loras"), api("/api/state"), api("/api/settings"),
+      const [capabilities, models, loras, engineState, settings, storage] = await Promise.all([
+        api("/api/capabilities"), api("/api/models"), api("/api/loras"), api("/api/state"), api("/api/settings"), api("/api/storage"),
       ]);
+      $("#modelStoragePath").textContent = storage.model_root;
+      $("#loraStoragePath").textContent = storage.lora_root;
       state.capabilities = capabilities;
       state.models = models.items || [];
       state.loras = loras.items || [];
@@ -541,6 +543,7 @@
       $("#attentionBackend").value = settings.attention_backend;
     }
     const hires = settings.hires || {};
+    if (settings.output_dir) $("#outputDirectory").value = settings.output_dir;
     if (hires.scale) $("#upscaleFactor").value = hires.scale;
     if (hires.method && $(`#hiresMethod option[value="${safeSelectorValue(hires.method)}"]`)) $("#hiresMethod").value = hires.method;
     if (hires.refine_steps) $("#refineSteps").value = hires.refine_steps;
@@ -766,7 +769,7 @@
     const source = state.upscaleSourceItem;
     const sourceUrl = source?.result?.image_url || source?.image_url;
     if (!sourceUrl) {
-      showError("Hiresに使用するソース画像を履歴から選んでください");
+      showError("Hiresに使用する画像を選択してください");
       return;
     }
     const request = {
@@ -774,7 +777,7 @@
       ...collectUpscaleSettings(),
       attention_backend: $("#attentionBackend").value,
       model_id: modelSelect.value || undefined,
-      prompt: $("#prompt").value.trim() || undefined,
+      prompt: $("#upscalePrompt").value.trim() || undefined,
       negative_prompt: $("#negativePrompt").value.trim() || undefined,
       seed: source.result?.seed ?? source.seed ?? undefined,
       loras: collectLoraSelection(),
@@ -991,13 +994,15 @@
     $("#sourceEmpty").hidden = hasSource;
     $("#sourceCard").hidden = !hasSource;
     $("#sourceSettings").hidden = !hasSource;
+    if (hasSource) $("#upscalePrompt").value = request.prompt || "";
     if (!hasSource) {
       $("#sourceThumbnail").removeAttribute("src");
+      $("#upscalePrompt").value = "";
       updateGenerateAvailability();
       return;
     }
     $("#sourceThumbnail").src = result.image_url;
-    $("#sourceFilename").textContent = filenameFromUrl(result.image_url);
+    $("#sourceFilename").textContent = result.filename || filenameFromUrl(result.image_url);
     $("#sourceDimensions").textContent = result.width && result.height ? `${result.width} × ${result.height}` : "サイズ情報なし";
     $("#sourcePrompt").textContent = request.prompt || "画像メタデータから継承";
     $("#sourceModel").textContent = request.model_id || request.model?.id || "画像メタデータから継承";
@@ -1202,11 +1207,47 @@
   $("#generateModeTab").addEventListener("click", () => setMode("generate"));
   $("#upscaleModeTab").addEventListener("click", () => setMode("upscale"));
   $("#clearSource").addEventListener("click", () => setUpscaleSource(null));
+  async function uploadSource(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return showError("画像ファイルを選択してください");
+    const body = new FormData();
+    body.append("image", file);
+    try {
+      const result = await api("/api/import-image", { method: "POST", body, timeout: 120000 });
+      setUpscaleSource({ result, request: {} });
+      setMode("upscale");
+      clearError();
+      $("#upscalePrompt").focus();
+    } catch (error) { showError(error.message); }
+  }
+  $("#selectSourceFile").addEventListener("click", () => $("#sourceFile").click());
+  $("#sourceFile").addEventListener("change", (event) => uploadSource(event.target.files?.[0]));
+  $("#sourceEmpty").addEventListener("click", () => $("#sourceFile").click());
+  $("#sourceEmpty").addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("#sourceFile").click(); } });
+  for (const eventName of ["dragenter", "dragover"]) $("#sourceEmpty").addEventListener(eventName, (event) => { event.preventDefault(); event.currentTarget.classList.add("is-dragover"); });
+  for (const eventName of ["dragleave", "drop"]) $("#sourceEmpty").addEventListener(eventName, (event) => { event.preventDefault(); event.currentTarget.classList.remove("is-dragover"); });
+  $("#sourceEmpty").addEventListener("drop", (event) => uploadSource(event.dataTransfer.files?.[0]));
+  $("#sourceCard").addEventListener("dragover", (event) => event.preventDefault());
+  $("#sourceCard").addEventListener("drop", (event) => { event.preventDefault(); uploadSource(event.dataTransfer.files?.[0]); });
+  $("#saveOutputDirectory").addEventListener("click", async () => {
+    try {
+      const result = await api("/api/settings", { method: "PUT", body: { output_dir: $("#outputDirectory").value.trim() } });
+      $("#outputDirectory").value = result.output_dir;
+      $("#outputDirectoryStatus").textContent = "保存しました";
+      await loadHistory();
+    } catch (error) { $("#outputDirectoryStatus").textContent = error.message; }
+  });
   $("#chooseSource").addEventListener("click", () => {
     showError("右側の履歴にある画像の「Hires」を押してください");
     $("#historyHeading").scrollIntoView({ behavior: "smooth", block: "start" });
   });
   $("#openOutput").addEventListener("click", openOutputFolder);
+  async function openStorageFolder(kind) {
+    try { await api("/api/open-storage-folder", { method: "POST", body: { kind } }); }
+    catch (error) { showError(error.message); }
+  }
+  $("#openModelFolder").addEventListener("click", () => openStorageFolder("models"));
+  $("#openLoraFolder").addEventListener("click", () => openStorageFolder("loras"));
   $("#refreshHistory").addEventListener("click", loadHistory);
   $("#refreshModels").addEventListener("click", connect);
   $("#reconnectBackend").addEventListener("click", connect);

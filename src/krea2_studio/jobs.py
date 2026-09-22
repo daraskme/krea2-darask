@@ -8,7 +8,7 @@ import traceback
 import uuid
 from typing import Any
 
-from .config import OUTPUT_ROOT
+from .config import output_roots, output_url
 from .engine import GenerationCancelled, KreaEngine
 
 
@@ -125,11 +125,12 @@ class JobManager:
             ]
             known_urls = {x.get("result", {}).get("image_url") for x in completed if x.get("result")}
         saved = []
-        for sidecar in sorted(OUTPUT_ROOT.glob("*/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        sidecars = [p for root in output_roots() if root.is_dir() for p in root.glob("*/*.json")]
+        for sidecar in sorted(sidecars, key=lambda p: p.stat().st_mtime, reverse=True):
             png = sidecar.with_suffix(".png")
             if not png.is_file():
                 continue
-            image_url = "/outputs/" + png.relative_to(OUTPUT_ROOT).as_posix()
+            image_url = output_url(png)
             if image_url in known_urls:
                 continue
             try:
@@ -143,7 +144,7 @@ class JobManager:
                 "started_at": None, "completed_at": metadata.get("created_at"), "request": metadata,
                 "error": None, "result": {
                     "image_url": image_url,
-                    "metadata_url": "/outputs/" + sidecar.relative_to(OUTPUT_ROOT).as_posix(),
+                    "metadata_url": output_url(sidecar),
                     "width": metadata.get("final_width", metadata.get("width")),
                     "height": metadata.get("final_height", metadata.get("height")),
                     "seed": metadata.get("seed"), "elapsed_seconds": metadata.get("elapsed_seconds"),

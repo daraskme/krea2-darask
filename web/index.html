@@ -74,6 +74,7 @@
               <button class="model-load-button" id="loadModel" type="button" disabled>読み込む</button>
             </div>
             <div class="field-note" id="modelNote">ローカルモデルのみを使用します</div>
+            <div class="storage-path"><span>モデルの置き場所</span><code id="modelStoragePath">確認中…</code><button class="text-button" id="openModelFolder" type="button">開く</button></div>
             <div class="model-runtime-status" id="modelRuntimeStatus" role="status" aria-live="polite">
               <span class="status-dot" aria-hidden="true"></span>
               <span id="modelRuntimeText">GPUモデル未読込</span>
@@ -101,6 +102,7 @@
               </div>
               <button class="small-button" id="addLora" type="button">＋ 追加</button>
             </div>
+            <div class="storage-path"><span>LoRAの置き場所（.safetensors）</span><code id="loraStoragePath">確認中…</code><button class="text-button" id="openLoraFolder" type="button">開く</button></div>
             <div class="lora-list" id="loraList" aria-live="polite"></div>
           </section>
 
@@ -149,10 +151,12 @@
           <div id="upscaleControls" role="tabpanel" aria-labelledby="upscaleModeTab" hidden>
             <section class="form-section upscale-source-section" aria-labelledby="upscaleSourceHeading">
               <div class="label-row"><h2 id="upscaleSourceHeading">ソース画像</h2><button class="text-button" id="chooseSource" type="button">履歴から選択</button></div>
-              <div class="source-empty" id="sourceEmpty">
+              <input id="sourceFile" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+              <button class="small-button" id="selectSourceFile" type="button">画像ファイルを選択</button>
+              <div class="source-empty" id="sourceEmpty" tabindex="0" role="button" aria-label="画像をドロップまたは選択">
                 <span aria-hidden="true">＋</span>
-                <p>履歴から画像を選んでください</p>
-                <small>画像の「Hires」を押すと、設定も引き継ぎます</small>
+                <p>画像をここにドロップ、またはクリックして選択</p>
+                <small>履歴の「Hires」からも開けます</small>
               </div>
               <div class="source-card" id="sourceCard" hidden>
                 <img id="sourceThumbnail" alt="Hiresソース画像" />
@@ -166,6 +170,8 @@
               </dl>
             </section>
             <section class="form-section" aria-labelledby="upscaleSettingsHeading">
+              <label class="field-label" for="upscalePrompt">再描画プロンプト</label>
+              <textarea id="upscalePrompt" rows="3" maxlength="4000" placeholder="外部画像にはプロンプトを入力してください"></textarea>
               <h2 id="upscaleSettingsHeading">Hires設定</h2>
               <div class="hires-options hires-options-standalone">
                 <label><span>拡大率</span><select id="upscaleFactor" name="upscale_factor"><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
@@ -253,6 +259,7 @@
     <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
       <form method="dialog">
         <div class="dialog-header"><div><p class="eyebrow">System</p><h2 id="settingsTitle">エンジン情報</h2></div><button class="icon-button" value="cancel" aria-label="閉じる">×</button></div>
+        <div class="output-settings"><label for="outputDirectory">出力先フォルダー</label><div><input id="outputDirectory" type="text" spellcheck="false" /><button class="small-button" id="saveOutputDirectory" type="button">保存</button></div><small id="outputDirectoryStatus">既存のフォルダーの絶対パスを入力してください</small></div>
         <div class="system-card">
           <div><span class="status-dot" aria-hidden="true"></span><strong id="dialogStatus">接続を確認中</strong></div>
           <button class="small-button" id="reconnectBackend" type="button">再接続</button>

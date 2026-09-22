@@ -38,6 +38,33 @@ supplies `sm_120` compiler settings and the NVIDIA library path.
 `requirements-nixos.txt` excludes the Windows-only Triton and SageAttention
 wheels. The measured PyTorch SDPA backend is selected by default.
 
+## モデルと LoRA の置き場所
+
+画面の「モデルとスタイル」にモデルと LoRA の実際の保存フォルダーを表示し、
+「開く」からファイルマネージャーで開けます。このPCの既定は次の通りです。
+
+- 公式 Diffusers モデル: `models/krea2-turbo-diffusers/`
+- Turbo 4 用 LoRA と追加 LoRA: `models/loras/krea2/` の `.safetensors`
+- 単一ファイル形式のモデル構成: `models/diffusion_models/krea2/`、`models/text_encoders/`、`models/vae/`
+
+上記はリポジトリ直下からの相対パスです。現在登録済みのモデルの実際のパスは
+`config.local.toml` の `[[models]]` を確認してください。モデルや LoRA を追加したら
+画面の「再読込」を押します。モデルファイルは Git に含まれません。
+
+## 保存先と Hires への外部画像入力
+
+生成画像、Hires の出力、読み込んだ外部画像は、既定では
+`/run/media/hiroshi/ボリューム/生成物` に保存します。設定画面の「出力先フォルダー」には
+存在する書き込み可能なフォルダーの絶対パスを入力し、「保存」で切り替えられます。
+生成・アップスケール中は切り替えられません。以前の保存先と従来の `outputs/` の
+画像も履歴から参照できます。外付けボリュームがマウントされていない場合は、
+保存前にマウントしてください。
+
+Hires タブでは履歴の画像に加え、PNG/JPEG/WebP をドラッグアンドドロップするか
+「画像ファイルを選択」で読み込めます。外部画像には再描画プロンプトを入力してください。
+読み込んだ画像は保存先の `imports/` に PNG として置かれます。ファイルは最大
+25 MiB、辺の長さは 16〜4096 px です。仕上がりは最大 4096×4096 px です。
+
 ## Measured generation speed on noxos
 
 The official [Krea 2 Turbo](https://huggingface.co/krea/Krea-2-Turbo) Diffusers

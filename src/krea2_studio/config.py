@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,8 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_ROOT = (PROJECT_ROOT / "outputs").resolve()
+OUTPUT_ROOT = Path("/run/media/hiroshi/ボリューム/生成物")
+LEGACY_OUTPUT_ROOT = (PROJECT_ROOT / "outputs").resolve()
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8189, "open_browser": True, "max_pending_jobs": 8},
@@ -81,6 +83,8 @@ class SettingsStore:
         "height": 1024,
         "preset": "fast4",
         "attention_backend": "sdpa",
+        "output_dir": str(OUTPUT_ROOT),
+        "output_dirs": [str(OUTPUT_ROOT), str(LEGACY_OUTPUT_ROOT)],
         "hires": {"enabled": False, "scale": 1.5, "method": "lanczos", "refine_steps": 8, "denoise_strength": 0.3},
     }
 
@@ -98,6 +102,11 @@ class SettingsStore:
 
     def save(self, data: dict[str, Any]) -> dict[str, Any]:
         normalized = validate_settings(data)
+        target = Path(normalized["output_dir"])
+        if not target.is_dir() or not os.access(target, os.W_OK):
+            raise ValueError("Output directory must exist and be writable")
+        previous = self.load()["output_dirs"]
+        normalized["output_dirs"] = list(dict.fromkeys([*previous, *normalized["output_dirs"], str(target)]))
         self.path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
         return normalized
 
@@ -114,6 +123,11 @@ def validate_settings(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Unknown preset")
     if result["attention_backend"] not in {"auto", "sdpa", "sage2"}:
         raise ValueError("Unknown attention backend")
+    directory = Path(str(result["output_dir"]).strip()).expanduser()
+    if not directory.is_absolute():
+        raise ValueError("Output directory must be an absolute path")
+    result["output_dir"] = str(directory.resolve())
+    result["output_dirs"] = [str(Path(path).resolve()) for path in result.get("output_dirs", []) if Path(path).is_absolute()]
     hires = result["hires"]
     hires["scale"] = float(hires["scale"])
     hires["refine_steps"] = int(hires["refine_steps"])
@@ -123,8 +137,34 @@ def validate_settings(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def output_roots() -> list[Path]:
+    settings = SettingsStore().load()
+    return list(dict.fromkeys(Path(path) for path in [settings["output_dir"], *settings["output_dirs"], str(LEGACY_OUTPUT_ROOT)]))
+
+
+def output_root() -> Path:
+    return output_roots()[0]
+
+
+def _root_id(root: Path) -> str:
+    return hashlib.sha256(str(root).encode()).hexdigest()[:16]
+
+
+def output_url(path: Path) -> str:
+    path = path.resolve()
+    for root in output_roots():
+        if path.is_relative_to(root):
+            return f"/outputs/{_root_id(root)}/{path.relative_to(root).as_posix()}"
+    raise ValueError("File is outside registered output directories")
+
+
 def safe_output_path(relative: str) -> Path:
-    candidate = (OUTPUT_ROOT / relative).resolve()
-    if candidate != OUTPUT_ROOT and OUTPUT_ROOT not in candidate.parents:
+    parts = Path(relative).parts
+    roots = output_roots()
+    selected = next((root for root in roots if parts and parts[0] == _root_id(root)), None)
+    root = selected or LEGACY_OUTPUT_ROOT
+    suffix = Path(*parts[1:]) if selected else Path(relative)
+    candidate = (root / suffix).resolve()
+    if not candidate.is_relative_to(root):
         raise ValueError("Output path escapes the output directory")
     return candidate

@@ -14,6 +14,7 @@ vae = "models/vae/qwen_image_vae.safetensors"
 qwen_config = "models/qwen3-vl-4b-instruct"
 lora_root = "models/loras/krea2"
 upscaler = "models/upscale_models/4x-UltraSharpV2_Lite.safetensors"
+# Output directory is selected in the app settings; default: /run/media/hiroshi/ボリューム/生成物
 
 [engine]
 default_model = "krea2-turbo-bf16"

@@ -10,7 +10,7 @@ from unittest import mock
 
 from PIL import Image, ExifTags
 
-from krea2_studio.config import OUTPUT_ROOT, safe_output_path, validate_settings
+from krea2_studio.config import OUTPUT_ROOT, output_url, safe_output_path, validate_settings
 from krea2_studio.jobs import JobManager
 from krea2_studio.loaders import PromptEmbeddingCache, load_lora_file, normalize_krea_lora_state, transformer_source_key
 from krea2_studio.metadata import EXIF_USER_COMMENT, decode_user_comment, read_image_metadata, save_image
@@ -23,6 +23,22 @@ class ConfigTests(unittest.TestCase):
             validate_settings({"width": 513})
         with self.assertRaises(ValueError):
             safe_output_path("../private.txt")
+
+
+class OutputDirectoryTests(unittest.TestCase):
+    def test_current_and_previous_output_dirs_have_stable_safe_urls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / "current"
+            old = Path(tmp) / "old"
+            current.mkdir(); old.mkdir()
+            with mock.patch("krea2_studio.config.SettingsStore.load", return_value={
+                "output_dir": str(current), "output_dirs": [str(current), str(old)]
+            }):
+                for folder in (current, old):
+                    path = folder / "2026-09-22" / "image.png"
+                    self.assertEqual(safe_output_path(output_url(path).removeprefix("/outputs/")), path)
+                with self.assertRaises(ValueError):
+                    safe_output_path(output_url(current / "image.png").removeprefix("/outputs/") + "/../../private")
 
 
 class MetadataTests(unittest.TestCase):
@@ -204,6 +220,25 @@ class SeparateHiresTests(unittest.TestCase):
         engine = KreaEngine(DEFAULT_CONFIG)
         with self.assertRaisesRegex(ValueError, "separate jobs"):
             engine._resolve_request({"prompt": "test", "hires": {"enabled": True}})
+
+    def test_upscale_accepts_imported_image_with_explicit_prompt(self):
+        from krea2_studio.config import DEFAULT_CONFIG
+        from krea2_studio.engine import KreaEngine
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "imports" / "source.png"
+            path.parent.mkdir()
+            Image.new("RGB", (256, 256), "blue").save(path)
+            with mock.patch("krea2_studio.config.SettingsStore.load", return_value={
+                "output_dir": str(root), "output_dirs": [str(root)]
+            }), mock.patch("krea2_studio.engine.discover_loras", return_value={"items": []}):
+                engine = KreaEngine(DEFAULT_CONFIG)
+                resolved, selected, parent = engine._resolve_upscale_request({
+                    "source_image": output_url(path), "prompt": "a blue square", "scale": 1.5,
+                })
+                self.assertEqual(selected, path)
+                self.assertEqual(parent, {})
+                self.assertEqual(resolved["prompt"], "a blue square")
 
     def test_upscale_requires_safe_existing_source(self):
         from krea2_studio.config import DEFAULT_CONFIG

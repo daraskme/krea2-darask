@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from .attention import Sage2KreaAttnProcessor
-from .config import OUTPUT_ROOT, safe_output_path
+from .config import output_root, output_url, safe_output_path
 from .discovery import discover_loras, discover_models, get_model_spec, resolve_lora
 from .loaders import PromptEmbeddingCache, load_lora_file, load_text_encoder, load_transformer, load_vae
 from .metadata import read_image_metadata, save_image
@@ -336,11 +336,9 @@ class KreaEngine:
         metadata = self._metadata(resolved, active_loras, pass_records, elapsed, performance)
         progress(0.97, "saving", "メタデータを保存中")
         stem = f"krea2_{datetime.now().strftime('%H%M%S_%f')}_{resolved['seed']}_{secrets.token_hex(3)}"
-        png_path, json_path = save_image(image, OUTPUT_ROOT, stem, metadata)
-        relative_png = png_path.relative_to(OUTPUT_ROOT).as_posix()
-        relative_json = json_path.relative_to(OUTPUT_ROOT).as_posix()
+        png_path, json_path = save_image(image, output_root(), stem, metadata)
         return {
-            "image_url": f"/outputs/{relative_png}", "metadata_url": f"/outputs/{relative_json}",
+            "image_url": output_url(png_path), "metadata_url": output_url(json_path),
             "width": image.width, "height": image.height, "seed": resolved["seed"], "elapsed_seconds": round(elapsed, 3),
             "total_seconds": round(time.perf_counter() - total_started, 3),
         }
@@ -383,7 +381,7 @@ class KreaEngine:
         inference_seconds = time.perf_counter() - started
         if cancelled():
             raise GenerationCancelled()
-        source_relative = source_path.relative_to(OUTPUT_ROOT).as_posix()
+        source_url = output_url(source_path)
         passes = [{
             "kind": "hires_refine", "steps": resolved["hires"]["refine_steps"],
             "denoise_strength": resolved["hires"]["denoise_strength"], "distillation_adapter_removed": True,
@@ -399,20 +397,20 @@ class KreaEngine:
         metadata = self._metadata(resolved, active_loras, passes, inference_seconds, performance)
         metadata["operation"] = "upscale"
         metadata["source"] = {
-            "image_url": f"/outputs/{source_relative}", "relative_path": source_relative,
-            "metadata_url": f"/outputs/{source_path.with_suffix('.json').relative_to(OUTPUT_ROOT).as_posix()}",
+            "image_url": source_url, "relative_path": source_url,
+            "metadata_url": output_url(source_path.with_suffix(".json")) if source_path.with_suffix(".json").is_file() else None,
             "schema": parent.get("schema"), "created_at": parent.get("created_at"), "seed": parent.get("seed"),
         }
         progress(0.97, "saving", "高解像度画像を保存中")
         stem = f"krea2_hires_{datetime.now().strftime('%H%M%S_%f')}_{resolved['seed']}_{secrets.token_hex(3)}"
-        png_path, json_path = save_image(image, OUTPUT_ROOT, stem, metadata)
+        png_path, json_path = save_image(image, output_root(), stem, metadata)
         return {
-            "image_url": f"/outputs/{png_path.relative_to(OUTPUT_ROOT).as_posix()}",
-            "metadata_url": f"/outputs/{json_path.relative_to(OUTPUT_ROOT).as_posix()}",
+            "image_url": output_url(png_path),
+            "metadata_url": output_url(json_path),
             "width": image.width, "height": image.height, "seed": resolved["seed"],
             "elapsed_seconds": round(inference_seconds, 3),
             "total_seconds": round(time.perf_counter() - total_started, 3),
-            "source_image_url": f"/outputs/{source_relative}",
+            "source_image_url": source_url,
         }
 
     def _resolve_upscale_request(self, request: dict[str, Any]):
@@ -422,11 +420,11 @@ class KreaEngine:
         relative = source[len("/outputs/"):] if source.startswith("/outputs/") else source
         source_path = safe_output_path(relative)
         if source_path.suffix.lower() != ".png" or not source_path.is_file():
-            raise ValueError("source_image must name an existing PNG under this project's outputs directory")
+            raise ValueError("source_image must name an existing PNG in a registered output directory")
         try:
             parent = read_image_metadata(source_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Could not read source image metadata: {exc}") from exc
+        except (OSError, ValueError, json.JSONDecodeError, KeyError):
+            parent = {}
         parent_model = parent.get("model") if isinstance(parent.get("model"), dict) else {}
         model_id = str(request.get("model_id") or parent_model.get("id") or self.config["engine"]["default_model"])
         spec = get_model_spec(self.config, model_id)
